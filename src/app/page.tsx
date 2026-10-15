@@ -178,15 +178,12 @@ function MainContent() {
       setState("NEGOTIATING");
       toast.info("Connecting to sender...");
 
-      // Start signaling client
+      // Start signaling client and await sender's approval
       const signaling = new SignalingClient(roomId, secret, "receiver");
       signalingRef.current = signaling;
 
       signaling.subscribe((msg) => handleReceiverSignalMessage(msg));
       signaling.start();
-
-      // Initialize WebRTC as receiver
-      setupWebRTC(false);
     } catch (err: unknown) {
       console.error(err);
       toast.error(err instanceof Error ? err.message : "Failed to join room");
@@ -285,7 +282,9 @@ function MainContent() {
   const handleReceiverSignalMessage = async (msg: SignalMessage) => {
     switch (msg.type) {
       case "peer:approved":
-        if (!msg.approved) {
+        if (msg.approved) {
+          setupWebRTC(false);
+        } else {
           setState("ERROR");
           setErrorMessage("Sender declined the pairing request.");
           toast.error("Connection rejected by sender");
@@ -293,6 +292,9 @@ function MainContent() {
         break;
 
       case "signal:offer":
+        if (!webrtcRef.current) {
+          setupWebRTC(false);
+        }
         if (webrtcRef.current) {
           await webrtcRef.current.handleOffer(msg.sdp);
         }
