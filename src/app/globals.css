@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  /* Creamy Warm Canvas */
+  --bg-primary: #FDFBF7;
+  --bg-secondary: #F8F3EA;
+  --bg-tertiary: #EFE6D8;
+  --bg-card: #FFFFFF;
+  --bg-elevated: #FAF6EF;
+
+  /* Deep Warm Typography */
+  --text-primary: #2C1A11;
+  --text-secondary: #6B5244;
+  --text-muted: #9C8373;
+  --text-inverted: #FFFFFF;
+
+  /* Handcrafted Terracotta / Burnt Sienna Accent */
+  --accent-primary: #C45F2C;
+  --accent-hover: #AA4E20;
+  --accent-light: #FBECE3;
+  --accent-subtle: #FFF7F2;
+
+  /* Borders & Dividers */
+  --border-subtle: #EDE2D3;
+  --border-default: #DFD0BE;
+  --border-strong: #C4B19C;
+
+  /* Feedback Colors */
+  --success: #2E7D4F;
+  --success-bg: #EAF6EE;
+  --warning: #B87518;
+  --warning-bg: #FDF4E7;
+  --error: #C23E2A;
+  --error-bg: #FDEEEB;
+  --info: #2B72A8;
+  --info-bg: #EAF2FA;
+
+  /* Shadows */
+  --shadow-warm-sm: 0 1px 3px rgba(44, 26, 17, 0.05);
+  --shadow-warm-md: 0 6px 18px -4px rgba(44, 26, 17, 0.08);
+  --shadow-warm-lg: 0 16px 36px -6px rgba(44, 26, 17, 0.12);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  margin: 0;
+  font-family: var(--font-dm-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle, tasteful micro-interactions */
+.btn-primary {
+  background-color: var(--accent-primary);
+  color: #ffffff;
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(196, 95, 44, 0.25);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--bg-secondary);
+  border-color: var(--border-strong);
+}
+
+.warm-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-warm-md);
+  border-radius: 1.25rem;
+}
+
+/* Monospace room code display */
+.room-code-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.22em;
+}
+
+/* Custom smooth progress bar animation */
+.progress-fill {
+  transition: width 200ms ease-out;
+}
+
+/* Drag overlay */
+.drag-active {
+  border-color: var(--accent-primary) !important;
+  background-color: var(--accent-subtle) !important;
+}
