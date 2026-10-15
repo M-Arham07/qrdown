@@ -1,6 +1,7 @@
-import { STUN_SERVERS } from "@/lib/constants";
+import { STUN_SERVERS, TURN_SERVERS } from "@/lib/constants";
 import { ConnectionMode } from "@/types/transfer";
 import { SignalMessage } from "@/types/signaling";
+import { APP_CONFIG } from "@/lib/constants";
 
 export interface WebRTCOptions {
   isInitiator: boolean;
@@ -27,28 +28,32 @@ export class WebRTCEngine {
   public init() {
     if (typeof window === "undefined") return;
 
+    // Include both STUN and TURN for maximum connectivity:
+    // STUN for direct P2P, TURN relay for symmetric NAT / corporate networks
     this.pc = new RTCPeerConnection({
-      iceServers: [
-        {
-          urls: [
-            "stun:stun.l.google.com:19302",
-            "stun:stun1.l.google.com:19302",
-            "stun:stun.services.mozilla.com",
-            "stun:global.stun.twilio.com:3478",
-          ],
-        },
-      ],
-      iceCandidatePoolSize: 6,
+      iceServers: [...STUN_SERVERS, ...TURN_SERVERS],
+      iceTransportPolicy: "all", // allow STUN first, fall back to TURN
+      iceCandidatePoolSize: 10,  // pre-gather candidates to speed up connection
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
     });
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("[WebRTC] Local ICE candidate gathered:", event.candidate.type, event.candidate.candidate);
+        const { type, protocol } = event.candidate;
+        console.log("[WebRTC] Local ICE candidate:", type, protocol, event.candidate.address);
         this.options.onSignal({
           type: "signal:ice",
           candidate: event.candidate.toJSON(),
         });
+      } else {
+        // null candidate = gathering complete
+        console.log("[WebRTC] ICE gathering complete");
       }
+    };
+
+    this.pc.onicegatheringstatechange = () => {
+      console.log("[WebRTC] ICE gathering state:", this.pc?.iceGatheringState);
     };
 
     this.pc.oniceconnectionstatechange = () => {
@@ -57,17 +62,27 @@ export class WebRTCEngine {
       console.log("[WebRTC] ICE connection state:", state);
 
       if (state === "checking") {
-        // Start timeout only when ICE checking actually begins
-        this.startIceTimer(20000); // 20s generous window for NAT traversal
+        // Start timeout when ICE checking begins — use constant value
+        this.startIceTimer(APP_CONFIG.iceTimeoutMs);
       } else if (state === "connected" || state === "completed") {
         this.clearIceTimer();
         this.isConnected = true;
         this.detectConnectionMode();
       } else if (state === "failed") {
-        console.warn("[WebRTC] ICE connection failed");
+        console.warn("[WebRTC] ICE connection failed — attempting ICE restart");
         this.clearIceTimer();
-        this.options.onConnectionTimeout();
-      } else if (state === "disconnected" || state === "closed") {
+        // Try ICE restart before giving up
+        if (this.options.isInitiator && this.pc) {
+          this.pc.restartIce();
+          this.startIceTimer(10000); // 10s extra for restart
+        } else {
+          this.options.onConnectionTimeout();
+        }
+      } else if (state === "disconnected") {
+        // Transient disconnects can self-heal; give 8s grace period
+        console.warn("[WebRTC] ICE disconnected — waiting for reconnect...");
+        this.startIceTimer(8000);
+      } else if (state === "closed") {
         this.options.onDisconnected();
       }
     };
@@ -79,14 +94,18 @@ export class WebRTCEngine {
       if (state === "connected") {
         this.clearIceTimer();
         this.isConnected = true;
+      } else if (state === "failed") {
+        this.clearIceTimer();
+        this.options.onConnectionTimeout();
       }
     };
 
     if (this.options.isInitiator) {
-      // Sender creates the DataChannel
+      // Sender creates the DataChannel with optimized settings
       console.log("[WebRTC] Initiator creating DataChannel 'file-transfer'");
       this.dc = this.pc.createDataChannel("file-transfer", {
-        ordered: true,
+        ordered: true,           // Reliable delivery; use false + maxRetransmits:0 for raw speed (requires reorder)
+        maxPacketLifeTime: undefined,
       });
       this.setupDataChannel(this.dc);
     } else {
@@ -116,6 +135,11 @@ export class WebRTCEngine {
 
   public async handleOffer(sdp: RTCSessionDescriptionInit) {
     if (!this.pc) return;
+    // Ignore stale offers if already in a stable state with a remote description
+    if (this.pc.signalingState === "stable" && this.pc.remoteDescription) {
+      console.warn("[WebRTC] Ignoring duplicate offer (already stable)");
+      return;
+    }
     try {
       console.log("[WebRTC] Handling remote offer");
       await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
@@ -135,12 +159,15 @@ export class WebRTCEngine {
 
   public async handleAnswer(sdp: RTCSessionDescriptionInit) {
     if (!this.pc) return;
+    // Only set remote answer if we are in have-local-offer state
+    if (this.pc.signalingState !== "have-local-offer") {
+      console.warn("[WebRTC] Ignoring answer in unexpected signaling state:", this.pc.signalingState);
+      return;
+    }
     try {
       console.log("[WebRTC] Handling remote answer");
-      if (this.pc.signalingState !== "stable") {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        await this.drainPendingCandidates();
-      }
+      await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await this.drainPendingCandidates();
     } catch (err) {
       console.error("[WebRTC] Failed to handle answer:", err);
     }
@@ -149,7 +176,17 @@ export class WebRTCEngine {
   public async addIceCandidate(candidateInit: RTCIceCandidateInit) {
     if (!this.pc) return;
 
-    // Queue candidate if remote description is not set yet!
+    // Handle null/empty candidate (signaling end-of-candidates)
+    if (!candidateInit.candidate) {
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(candidateInit));
+      } catch {
+        // Some browsers reject null candidates — safe to ignore
+      }
+      return;
+    }
+
+    // Queue candidate if remote description is not set yet
     if (!this.pc.remoteDescription || !this.pc.remoteDescription.type) {
       console.log("[WebRTC] Queueing candidate until remoteDescription is set");
       this.pendingCandidates.push(candidateInit);
@@ -158,23 +195,22 @@ export class WebRTCEngine {
 
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate(candidateInit));
-      console.log("[WebRTC] Successfully added remote ICE candidate");
+      console.log("[WebRTC] Added remote ICE candidate:", candidateInit.candidate?.split(" ")[7]);
     } catch (err) {
-      console.error("[WebRTC] Error adding ICE candidate:", err);
+      console.warn("[WebRTC] Error adding ICE candidate (may be stale):", err);
     }
   }
 
   private async drainPendingCandidates() {
     if (!this.pc || !this.pc.remoteDescription) return;
     console.log(`[WebRTC] Draining ${this.pendingCandidates.length} queued ICE candidates`);
-    while (this.pendingCandidates.length > 0) {
-      const candidate = this.pendingCandidates.shift();
-      if (candidate) {
-        try {
-          await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.warn("[WebRTC] Failed to add drained candidate:", err);
-        }
+    const toProcess = [...this.pendingCandidates];
+    this.pendingCandidates = [];
+    for (const candidate of toProcess) {
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn("[WebRTC] Failed to add drained candidate:", err);
       }
     }
   }
@@ -183,19 +219,19 @@ export class WebRTCEngine {
     return this.dc;
   }
 
+  public getStats(): Promise<RTCStatsReport> | null {
+    return this.pc ? this.pc.getStats() : null;
+  }
+
   public close() {
     this.clearIceTimer();
     this.pendingCandidates = [];
     if (this.dc) {
-      try {
-        this.dc.close();
-      } catch {}
+      try { this.dc.close(); } catch {}
       this.dc = null;
     }
     if (this.pc) {
-      try {
-        this.pc.close();
-      } catch {}
+      try { this.pc.close(); } catch {}
       this.pc = null;
     }
     this.isConnected = false;
@@ -203,12 +239,19 @@ export class WebRTCEngine {
 
   private setupDataChannel(channel: RTCDataChannel) {
     channel.binaryType = "arraybuffer";
-    channel.bufferedAmountLowThreshold = 256 * 1024;
+    // 4 MiB backpressure threshold — allows large chunks to queue without
+    // blocking the JavaScript event loop
+    channel.bufferedAmountLowThreshold = APP_CONFIG.bufferThresholdBytes;
 
     channel.onopen = () => {
-      console.log("[WebRTC] DataChannel OPEN and ready for transfer");
+      console.log("[WebRTC] DataChannel OPEN | readyState:", channel.readyState);
       this.clearIceTimer();
       this.isConnected = true;
+      // Log the negotiated SCTP max message size for debugging
+      try {
+        const sctp = (this.pc as RTCPeerConnection & { sctp?: { maxMessageSize: number } }).sctp;
+        if (sctp) console.log("[WebRTC] SCTP maxMessageSize:", sctp.maxMessageSize);
+      } catch {}
       this.options.onDataChannelReady(channel);
     };
 
@@ -222,15 +265,17 @@ export class WebRTCEngine {
 
     channel.onclose = () => {
       console.log("[WebRTC] RTCDataChannel closed");
-      this.options.onDisconnected();
+      if (this.isConnected) {
+        this.options.onDisconnected();
+      }
     };
   }
 
-  private startIceTimer(timeoutMs = 20000) {
+  private startIceTimer(timeoutMs: number) {
     this.clearIceTimer();
     this.iceTimeoutTimer = setTimeout(() => {
       if (!this.isConnected) {
-        console.warn(`[WebRTC] ICE connection timeout after ${timeoutMs / 1000}s`);
+        console.warn(`[WebRTC] ICE timeout after ${timeoutMs / 1000}s — triggering fallback`);
         this.options.onConnectionTimeout();
       }
     }, timeoutMs);
@@ -264,6 +309,7 @@ export class WebRTCEngine {
         }
       });
 
+      console.log("[WebRTC] Detected connection mode:", mode);
       this.options.onConnectionModeChange(mode);
     } catch {
       this.options.onConnectionModeChange("INTERNET_P2P");

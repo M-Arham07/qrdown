@@ -3,6 +3,15 @@ import { SignalEnvelope, SignalMessage } from "@/types/signaling";
 
 type SignalListener = (msg: SignalMessage, env: SignalEnvelope) => void;
 
+/**
+ * Long-poll signaling client.
+ *
+ * Poll interval strategy:
+ *  - During WebRTC negotiation (ICE candidates flying): 150ms for low-latency
+ *  - After DataChannel open / idle: 1000ms to reduce server load
+ *
+ * The caller can call setFastMode(true/false) to switch modes.
+ */
 export class SignalingClient {
   private roomId: string;
   private secret: string;
@@ -11,6 +20,8 @@ export class SignalingClient {
   private polling = false;
   private pollTimeout: NodeJS.Timeout | null = null;
   private listeners: Set<SignalListener> = new Set();
+  private fastMode = true; // start fast for negotiation
+  private consecutiveErrors = 0;
 
   constructor(roomId: string, secret: string, role: PeerRole) {
     this.roomId = roomId;
@@ -28,6 +39,7 @@ export class SignalingClient {
   public start() {
     if (this.polling) return;
     this.polling = true;
+    this.consecutiveErrors = 0;
     this.pollLoop();
   }
 
@@ -37,6 +49,14 @@ export class SignalingClient {
       clearTimeout(this.pollTimeout);
       this.pollTimeout = null;
     }
+  }
+
+  /**
+   * Switch between fast (150ms) and slow (1000ms) poll intervals.
+   * Call setFastMode(false) after P2P DataChannel is open to reduce load.
+   */
+  public setFastMode(fast: boolean) {
+    this.fastMode = fast;
   }
 
   public async send(message: SignalMessage) {
@@ -53,10 +73,10 @@ export class SignalingClient {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        console.warn("Signal send failed:", data);
+        console.warn("[Signaling] Send failed:", data);
       }
     } catch (err) {
-      console.error("Failed to send signal:", err);
+      console.error("[Signaling] Failed to send signal:", err);
     }
   }
 
@@ -67,10 +87,15 @@ export class SignalingClient {
       const res = await fetch(
         `/api/sessions/signal?roomId=${encodeURIComponent(this.roomId)}&secret=${encodeURIComponent(
           this.secret
-        )}&role=${this.role}&since=${this.lastTimestamp}`
+        )}&role=${this.role}&since=${this.lastTimestamp}`,
+        {
+          // Abort if the server takes > 5s to respond
+          signal: AbortSignal.timeout(5000),
+        }
       );
 
       if (res.ok) {
+        this.consecutiveErrors = 0;
         const data = await res.json();
         if (data.signals && Array.isArray(data.signals)) {
           for (const env of data.signals as SignalEnvelope[]) {
@@ -81,18 +106,27 @@ export class SignalingClient {
               try {
                 listener(env.message, env);
               } catch (e) {
-                console.error("Signal listener error:", e);
+                console.error("[Signaling] Listener error:", e);
               }
             });
           }
         }
+      } else {
+        this.consecutiveErrors++;
       }
     } catch {
-      // transient network error, retry next cycle
+      // Transient network error or abort — back off slightly
+      this.consecutiveErrors++;
     }
 
-    if (this.polling) {
-      this.pollTimeout = setTimeout(() => this.pollLoop(), 350);
-    }
+    if (!this.polling) return;
+
+    // Adaptive interval: fast during negotiation, slow after connected
+    // Back off on repeated errors to avoid hammering the server
+    const baseInterval = this.fastMode ? 150 : 1000;
+    const errorBackoff = Math.min(this.consecutiveErrors * 200, 3000);
+    const interval = baseInterval + errorBackoff;
+
+    this.pollTimeout = setTimeout(() => this.pollLoop(), interval);
   }
 }

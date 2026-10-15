@@ -60,10 +60,17 @@ function MainContent() {
   const webrtcRef = useRef<WebRTCEngine | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const cancelRequestedRef = useRef(false);
+  // Use a ref for transfer state to avoid stale closure in WebRTC callbacks
+  const transferStateRef = useRef(state);
 
   // Buffer state for receiving files
   const incomingChunksRef = useRef<ArrayBuffer[]>([]);
   const currentReceivingFileIndexRef = useRef(0);
+
+  // Keep transferStateRef in sync so WebRTC callbacks don't see stale closures
+  useEffect(() => {
+    transferStateRef.current = state;
+  }, [state]);
 
   // Screen WakeLock active when transferring
   useWakeLock(state === "TRANSFERRING" || state === "UPLOADING" || state === "DOWNLOADING");
@@ -208,6 +215,8 @@ function MainContent() {
       onDataChannelReady: (channel) => {
         dataChannelRef.current = channel;
         setState("P2P_CONNECTED");
+        // Once DataChannel is open, slow down signaling poll — no more ICE candidates
+        signalingRef.current?.setFastMode(false);
         toast.success("Direct peer-to-peer connection established!");
 
         // If sender, now send file transfer request
@@ -222,11 +231,12 @@ function MainContent() {
         setConnectionMode(mode);
       },
       onConnectionTimeout: () => {
-        // 12-second ICE timeout
+        // 25s ICE timeout (includes TURN relay attempt) → offer cloud fallback
         setState("CLOUD_OFFERED");
       },
       onDisconnected: () => {
-        if (state === "TRANSFERRING") {
+        // Use ref to avoid stale closure — state captured at setup time would be wrong
+        if (transferStateRef.current === "TRANSFERRING") {
           setState("ERROR");
           setErrorMessage("Peer disconnected unexpectedly during transfer.");
         }
