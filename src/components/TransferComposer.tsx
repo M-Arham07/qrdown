@@ -82,7 +82,6 @@ export function TransferComposer({ onAdd, maxBytes, actionLabel = "Add to transf
         <button type="button" onClick={() => { setText(""); setImage(null); }} className="min-h-11 rounded-lg px-3 text-sm text-zinc-600 hover:bg-zinc-100">Clear</button>
         {!image && <span className="ml-auto text-xs tabular-nums text-zinc-600">{(bytes / 1000).toFixed(1)} KB</span>}
       </div>}
-      <p className="text-xs text-zinc-500">Pasted content stays here until you choose to send it.</p>
     </section>
   );
 }

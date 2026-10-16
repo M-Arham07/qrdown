@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import "./globals.css";
 
-const siteUrl = "https://p2p-sharing-beta.vercel.app";
+const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://qrdown.vercel.app";
 const title = "QRDown — Air-Gapped Optical & P2P File Transfer";
 const description =
   "Transfer files offline via animated QR codes or direct WebRTC peer-to-peer. Encrypted, instant, and air-gapped without accounts or cloud tracking.";

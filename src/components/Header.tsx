@@ -55,11 +55,8 @@ export function Header() {
               </g>
             </svg>
           </div>
-          <div className="flex items-baseline gap-1.5">
+          <div className="flex items-center">
             <span className="text-lg font-bold tracking-tight text-[#09090B]">QRDown</span>
-            <span className="text-[10px] font-semibold tracking-wider uppercase text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 hidden sm:inline-block">
-              P2P & Optical
-            </span>
           </div>
         </Link>
 
