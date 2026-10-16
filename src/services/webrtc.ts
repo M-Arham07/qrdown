@@ -10,6 +10,7 @@ export interface WebRTCOptions {
   onDataChannelReady: (channel: RTCDataChannel) => void;
   onDataChannelMessage: (event: MessageEvent) => void;
   onConnectionModeChange: (mode: ConnectionMode) => void;
+  onReconnectingChange?: (reconnecting: boolean) => void;
   onConnectionTimeout: () => void;
   onDisconnected: () => void;
 }
@@ -75,6 +76,7 @@ export class WebRTCEngine {
       console.log("[WebRTC] ICE connection state:", state);
 
       if (state === "checking") {
+        if (this.isConnected) this.options.onReconnectingChange?.(true);
         // Start timeout when ICE checking begins — use constant value
         this.startIceTimer(APP_CONFIG.iceTimeoutMs);
       } else if (state === "connected" || state === "completed") {
@@ -83,12 +85,15 @@ export class WebRTCEngine {
           this.clearIceTimer();
           this.isConnected = true;
         }
+        this.options.onReconnectingChange?.(this.dc?.readyState !== "open");
         this.detectConnectionMode();
       } else if (state === "failed") {
         this.isConnected = false;
+        this.options.onReconnectingChange?.(true);
         void this.recoverConnection();
       } else if (state === "disconnected") {
         this.isConnected = false;
+        this.options.onReconnectingChange?.(true);
         this.startIceTimer(8000);
       } else if (state === "closed") {
         this.options.onDisconnected();
@@ -292,9 +297,9 @@ export class WebRTCEngine {
 
     channel.onclose = () => {
       console.log("[WebRTC] RTCDataChannel closed");
-      if (this.isConnected) {
-        this.options.onDisconnected();
-      }
+      this.options.onReconnectingChange?.(true);
+      this.options.onDisconnected();
+      void this.recoverConnection();
     };
   }
 
@@ -320,6 +325,7 @@ export class WebRTCEngine {
       this.recoveryAttempted = true;
       this.recovering = true;
       this.isConnected = false;
+      this.options.onReconnectingChange?.(true);
       // Only the sender offers; the receiver waits for the restart offer.
       if (this.options.isInitiator && this.pc.signalingState === "stable") {
         await this.startNegotiation(true);

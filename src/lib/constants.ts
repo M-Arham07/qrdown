@@ -7,8 +7,9 @@ export const APP_CONFIG = {
   roomTtlSeconds: 600, // 10 minutes
   reconnectGraceSeconds: 30,
   iceTimeoutMs: 25000, // 25s: generous window for TURN relay negotiation
-  // Reserve four bytes of the 64 KiB message budget for the chunk index.
-  chunkSizeBytes: 64 * 1024 - 4,
+  // Cap chunks at 256 KiB, then lower them to the browser's negotiated SCTP limit.
+  // Larger messages reduce per-chunk overhead on fast local networks.
+  chunkSizeBytes: 256 * 1024 - 4,
   bufferThresholdBytes: 4 * 1024 * 1024, // 4 MiB send buffer limit
   maxCloudSizeBytes: 100 * 1024 * 1024, // 100 MB max for cloud fallback
   cloudRetentionHours: 24,

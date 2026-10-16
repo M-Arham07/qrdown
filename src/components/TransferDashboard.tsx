@@ -7,6 +7,7 @@ import { XCircle } from "lucide-react";
 interface TransferDashboardProps {
   progress: TransferProgress | null;
   connectionMode: ConnectionMode;
+  isReconnecting?: boolean;
   peerDevice?: DeviceInfo | null;
   currentFileName?: string;
   onCancel: () => void;
@@ -15,6 +16,7 @@ interface TransferDashboardProps {
 export function TransferDashboard({
   progress,
   connectionMode,
+  isReconnecting = false,
   peerDevice,
   currentFileName,
   onCancel,
@@ -50,11 +52,18 @@ export function TransferDashboard({
     <div className="w-full flex flex-col gap-6">
       {/* Header status bar */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-[#52525B]">{modeLabel}</span>
+        <span className="text-xs text-[#52525B]">{isReconnecting ? "Reconnecting…" : modeLabel}</span>
         <div className="text-xs text-[#71717A] font-medium">
-          Connected to {peerDevice?.name || "Peer"}
+          {isReconnecting ? `Waiting for ${peerDevice?.name || "peer"}` : `Connected to ${peerDevice?.name || "Peer"}`}
         </div>
       </div>
+
+      {isReconnecting && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status" aria-live="polite">
+          <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-amber-700 border-t-transparent" />
+          <span>Connection interrupted. Trying to restore the transfer.</span>
+        </div>
+      )}
 
       {/* Progress card */}
       <div className="bg-[#FAFAFA] p-5 sm:p-6 rounded-lg border border-[#E4E4E7] flex flex-col gap-4">

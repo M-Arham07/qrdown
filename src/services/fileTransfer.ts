@@ -18,8 +18,8 @@ export interface ReceiveFileTracker {
 }
 
 /** Build metadata without reading the file; WebRTC provides transport integrity. */
-export async function prepareFileMetadataFast(file: File): Promise<FileMetadata> {
-  const totalChunks = Math.ceil(file.size / APP_CONFIG.chunkSizeBytes);
+export async function prepareFileMetadataFast(file: File, maxMessageSize = 64 * 1024): Promise<FileMetadata> {
+  const totalChunks = Math.ceil(file.size / getChunkSize(maxMessageSize));
   return {
     id: crypto.randomUUID(),
     name: file.name,
@@ -45,7 +45,7 @@ export const fileTransferService = {
     }
     const buffer = await file.arrayBuffer();
     const checksum = await cryptoService.computeChecksum(buffer);
-    const totalChunks = Math.ceil(file.size / APP_CONFIG.chunkSizeBytes);
+    const totalChunks = Math.ceil(file.size / getChunkSize(64 * 1024));
 
     return {
       id: crypto.randomUUID(),
@@ -72,8 +72,7 @@ export const fileTransferService = {
     maxMessageSize = 64 * 1024,
   }: SendFileOptions): Promise<void> {
     // Include the four byte header in the negotiated SCTP message limit.
-    const messageLimit = maxMessageSize > 0 ? maxMessageSize : 64 * 1024;
-    const chunkSize = Math.min(APP_CONFIG.chunkSizeBytes, messageLimit - 4);
+    const chunkSize = getChunkSize(maxMessageSize);
     if (chunkSize <= 0) throw new Error("Negotiated message size is too small");
     const bufferThreshold = APP_CONFIG.bufferThresholdBytes;
     const totalBytes = file.size;
@@ -165,6 +164,11 @@ export const fileTransferService = {
   },
 };
 
+function getChunkSize(maxMessageSize: number) {
+  const messageLimit = maxMessageSize > 0 ? maxMessageSize : 64 * 1024;
+  return Math.min(APP_CONFIG.chunkSizeBytes, messageLimit - 4);
+}
+
 /**
  * Returns a promise that resolves when the DataChannel's buffered amount
  * drops below the threshold. Uses the bufferedamountlow event for efficiency
@@ -189,8 +193,8 @@ function waitForBufferDrain(channel: RTCDataChannel, threshold: number): Promise
     };
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error("Transfer stalled. Reconnect the devices and try again."));
-    }, 30000);
+      reject(new Error("Transfer stalled while the connection was recovering."));
+    }, 65000);
     channel.addEventListener("bufferedamountlow", onDrain);
     channel.addEventListener("close", onClose);
     channel.addEventListener("error", onClose);

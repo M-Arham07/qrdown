@@ -30,6 +30,7 @@ function MainContent() {
   const [codeInputValue, setCodeInputValue] = useState(searchParams.get("code") || "");
   const [receivedTexts, setReceivedTexts] = useState<{ blob: Blob; name: string; id: string }[]>([]);
   const [isJoining, setIsJoining] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   const {
     state,
@@ -91,6 +92,7 @@ function MainContent() {
   useWakeLock(state === "TRANSFERRING" || state === "UPLOADING" || state === "DOWNLOADING");
 
   const cleanupConnections = () => {
+    setIsReconnecting(false);
     cancelRequestedRef.current = true;
     operationRef.current?.abort();
     incomingChunksRef.current = [];
@@ -257,6 +259,7 @@ function MainContent() {
       onDataChannelReady: (channel) => {
         if (cancelRequestedRef.current || signalingRef.current !== signaling) { channel.close(); return; }
         dataChannelRef.current = channel;
+        setIsReconnecting(false);
         setState("P2P_CONNECTED");
         // Once DataChannel is open, slow down signaling poll — no more ICE candidates
         signalingRef.current?.setFastMode(false);
@@ -293,18 +296,20 @@ function MainContent() {
       onConnectionModeChange: (mode) => {
         setConnectionMode(mode);
       },
+      onReconnectingChange: (reconnecting) => {
+        setIsReconnecting(reconnecting);
+        signalingRef.current?.setFastMode(reconnecting);
+      },
       onConnectionTimeout: () => {
         if (cancelRequestedRef.current || signalingRef.current !== signaling) return;
         // The engine exhausts connection recovery before offering cloud fallback.
+        setIsReconnecting(false);
         setState("CLOUD_OFFERED");
       },
       onDisconnected: () => {
-        // Use ref to avoid stale closure — state captured at setup time would be wrong
-        if (transferStateRef.current === "TRANSFERRING" || transferStateRef.current === "VERIFYING") {
-          fileAckRef.current?.reject(new Error("Peer disconnected before confirming the file"));
-          setState("ERROR");
-          setErrorMessage("Peer disconnected unexpectedly during transfer.");
-        }
+        // Keep the partial receive buffer and transfer UI alive while ICE restarts.
+        // If recovery fails, the engine offers encrypted cloud transfer.
+        setIsReconnecting(true);
       },
     });
 
@@ -428,8 +433,9 @@ function MainContent() {
    */
   const sendTransferRequest = async () => {
     const metadataList: FileMetadata[] = [];
+    const maxMessageSize = webrtcRef.current?.getMaxMessageSize() ?? 64 * 1024;
     for (const file of selectedFiles) {
-      const meta = await fileTransferService.prepareFileMetadataFast(file);
+      const meta = await fileTransferService.prepareFileMetadataFast(file, maxMessageSize);
       metadataList.push(meta);
     }
     setIncomingFiles(metadataList);
@@ -507,8 +513,13 @@ function MainContent() {
       if (dataChannelRef.current !== channel) return;
       if (cancelRequestedRef.current) {
         setState("CANCELLED");
+      } else if (channel.readyState !== "open" || (err instanceof Error && /stalled|connection closed/i.test(err.message))) {
+        // Don't discard the receiver's partial chunks or show a terminal error.
+        // ICE recovery will restore the route or promote the encrypted fallback.
+        setIsReconnecting(true);
       } else {
         console.error(err);
+        setIsReconnecting(false);
         setState("ERROR");
         setErrorMessage(err instanceof Error ? err.message : "P2P transfer interrupted");
       }
@@ -883,6 +894,11 @@ function MainContent() {
                         placeholder="000000"
                         value={codeInputValue}
                         onChange={(e) => setCodeInputValue(e.target.value.replace(/\D/g, ""))}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          e.preventDefault();
+                          if (!isJoining && codeInputValue.length === 6) void handleJoinWithCode();
+                        }}
                         className="room-code-badge text-center text-2xl font-bold py-3 px-4 rounded-lg border border-[#D4D4D8] bg-white text-[#18181B] focus:outline-none focus:border-[#1D4ED8] focus:ring-2 focus:ring-[#1D4ED8]/10 placeholder:font-sans placeholder:text-sm placeholder:font-normal placeholder:text-[#71717A]"
                       />
 
@@ -931,6 +947,7 @@ function MainContent() {
               <TransferDashboard
                 progress={progress}
                 connectionMode={connectionMode}
+                isReconnecting={isReconnecting}
                 peerDevice={peerDevice}
                 currentFileName={selectedFiles[0]?.name || incomingFiles[0]?.name}
                 onCancel={handleCancel}

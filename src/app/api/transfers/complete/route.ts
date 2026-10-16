@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { r2Service } from "@/lib/r2";
+import { objectStorageService } from "@/lib/objectStorage";
 import { sessionStore } from "@/lib/redis";
 import { RoomSession } from "@/types/session";
 
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
       if (!upload || upload.objectKey !== objectKey || !checksumVerified) {
         return NextResponse.json({ error: "Invalid upload completion" }, { status: 400 });
       }
-      await r2Service.deleteObject(objectKey);
+      await objectStorageService.deleteObject(objectKey);
       await sessionStore.del(`upload:${roomId}`);
     }
 

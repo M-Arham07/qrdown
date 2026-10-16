@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { r2Service } from "@/lib/r2";
+import { objectStorageService } from "@/lib/objectStorage";
 import { sessionStore } from "@/lib/redis";
 import { RoomSession } from "@/types/session";
 import { APP_CONFIG } from "@/lib/constants";
@@ -7,7 +7,7 @@ import { nanoid } from "nanoid";
 
 export async function POST(req: Request) {
   try {
-    if (process.env.NODE_ENV === "production" && !r2Service.isConfigured()) {
+    if (process.env.NODE_ENV === "production" && !objectStorageService.isConfigured()) {
       return NextResponse.json({ error: "Cloud storage is not configured" }, { status: 503 });
     }
     const body = await req.json();
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
     }
 
     const objectKey = `transfers/${roomId}/${nanoid()}_enc_${encodeURIComponent(fileName)}`;
-    const uploadUrl = await r2Service.createUploadUrl(objectKey, contentType || "application/octet-stream");
+    const uploadUrl = await objectStorageService.createUploadUrl(objectKey, contentType || "application/octet-stream");
 
     // Store upload metadata
     await sessionStore.set(

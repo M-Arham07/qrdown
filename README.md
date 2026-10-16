@@ -133,15 +133,17 @@ TURN_SHARED_SECRET=your_coturn_shared_secret
 ```
 
 ### Cloud Storage Fallback (Optional)
-Temporary object storage (S3 / Cloudflare R2) when direct peer connections fail:
+Temporary, client-side encrypted object storage (Backblaze B2 or another S3-compatible provider) when direct peer connections fail:
 ```dotenv
-R2_ACCOUNT_ID=your_account_id
-R2_ACCESS_KEY_ID=your_access_key
-R2_SECRET_ACCESS_KEY=your_secret_key
-R2_BUCKET_NAME=your_bucket_name
-R2_ENDPOINT=https://your_account_id.r2.cloudflarestorage.com
+OBJECT_STORAGE_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+OBJECT_STORAGE_REGION=us-west-004
+OBJECT_STORAGE_ACCESS_KEY_ID=your_b2_application_key_id
+OBJECT_STORAGE_SECRET_ACCESS_KEY=your_b2_application_key
+OBJECT_STORAGE_BUCKET=your_bucket_name
 CRON_SECRET=your_cleanup_cron_secret
 ```
+
+Existing deployments can continue using the legacy `R2_*` environment variables until they switch providers.
 
 ---
 

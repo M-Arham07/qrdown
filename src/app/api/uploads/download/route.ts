@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { r2Service } from "@/lib/r2";
+import { objectStorageService } from "@/lib/objectStorage";
 import { sessionStore } from "@/lib/redis";
 import { RoomSession } from "@/types/session";
 
@@ -19,7 +19,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Unauthorized session credentials" }, { status: 403 });
     }
 
-    const downloadUrl = await r2Service.createDownloadUrl(objectKey);
+    const downloadUrl = await objectStorageService.createDownloadUrl(objectKey);
 
     return NextResponse.json({ downloadUrl });
   } catch (error) {

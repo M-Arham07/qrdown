@@ -25,7 +25,7 @@ export interface CloudDownloadOptions {
 
 export const cloudFallbackService = {
   /**
-   * Encrypts file in browser and uploads to Cloudflare R2 via presigned URL
+   * Encrypts file in browser and uploads to S3-compatible storage via presigned URL
    */
   async uploadEncryptedFile({
     file,
@@ -146,7 +146,7 @@ export const cloudFallbackService = {
   },
 
   /**
-   * Downloads encrypted data from Cloudflare R2, decrypts client-side, and verifies checksum
+   * Downloads encrypted data from S3-compatible storage, decrypts client-side, and verifies checksum
    */
   async downloadAndDecryptFile({
     metadata,
