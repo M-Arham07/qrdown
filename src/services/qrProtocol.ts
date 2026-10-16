@@ -1,7 +1,7 @@
 // QR stream v2: gzip when useful, QR alphanumeric encoding, SHA-256 verification.
 export const QR_STREAM = {
   chunkBytes: 640,
-  framesPerSecond: 12,
+  framesPerSecond: 10,
   headerInterval: 16,
   maxFileBytes: 16 * 1024 * 1024,
 } as const;

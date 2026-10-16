@@ -11,7 +11,6 @@ let finished = false;
 let lastReport = 0;
 // Retain early frames until a repeated header arrives. Never mix transfer IDs.
 const early: QRChunkFrame[] = [];
-let canvas: OffscreenCanvas | null = null;
 function send(message: ScannerResponse) { self.postMessage(message); }
 function addChunk(frame: QRChunkFrame) {
   if (!info || frame.id !== info.id || frame.index < 0 || frame.index >= info.totalChunks || chunks.has(frame.index)) return;
@@ -59,21 +58,17 @@ self.onmessage = async ({ data }: MessageEvent<ScannerRequest>) => {
   try {
     if (data.type === "text") await consume(data.text);
     else {
-      let pixels: ImageData;
-      if (data.type === "scan") {
-        const bitmap = data.bitmap;
-        try {
-          if (!canvas) canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-          if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-          if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-          const context = canvas.getContext("2d", { willReadFrequently: true });
-          if (!context) throw new Error("Camera image processing is unavailable");
-          context.drawImage(bitmap, 0, 0);
-          pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-        } finally { bitmap.close(); }
-      } else pixels = new ImageData(data.pixels as Uint8ClampedArray<ArrayBuffer>, data.width, data.height);
-      const code = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: "dontInvert" });
-      if (code?.data) await consume(code.data);
+      // Avoid ImageData/OffscreenCanvas constructors: worker support varies on iOS.
+      // Pixels are transferred from a regular canvas without copying their buffer.
+      let code: ReturnType<typeof jsQR> = null;
+      try {
+        code = jsQR(data.pixels, data.width, data.height, { inversionAttempts: "dontInvert" });
+      } catch { /* An unreadable camera frame must not discard the transfer. */ }
+      if (code?.data && (code.data.startsWith("WS2:") || code.data.startsWith("WS1|"))) {
+        const { topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner } = code.location;
+        send({ type: "located", corners: [topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner] });
+        await consume(code.data);
+      }
     }
   } catch (error) {
     finished = true;
