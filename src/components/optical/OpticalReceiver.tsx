@@ -73,7 +73,7 @@ export function OpticalReceiver() {
     setPhase("opening");
     let startedAt = 0;
     try {
-      if (!window.isSecureContext) throw new Error("Open WebSend using HTTPS on your phone. Camera access does not work on an HTTP Wi-Fi address.");
+      if (!window.isSecureContext) throw new Error("Open QRDown using HTTPS on your phone. Camera access does not work on an HTTP Wi-Fi address.");
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera access is unavailable. Open this page directly in Safari or Chrome.");
       const requestCamera = async (video: boolean | MediaTrackConstraints) => {
         let timeout: ReturnType<typeof setTimeout> | undefined;

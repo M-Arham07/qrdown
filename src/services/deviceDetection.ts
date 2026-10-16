@@ -1,13 +1,13 @@
 import { DeviceInfo } from "@/types/session";
 import { nanoid } from "nanoid";
 
-const DEVICE_STORAGE_KEY = "websend_device_info";
+const DEVICE_STORAGE_KEY = "qrdown_device_info";
 
 export function getDeviceInfo(): DeviceInfo {
   if (typeof window === "undefined") {
     return {
       id: "server-device",
-      name: "WebSend Device",
+      name: "QRDown Device",
       isMobile: false,
     };
   }

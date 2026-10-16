@@ -915,7 +915,7 @@ function MainContent() {
                 <div>
                   <h3 className="font-bold text-base text-[#18181B]">Connecting devices</h3>
                   <p className="text-xs text-[#52525B] mt-1">
-                    Keep WebSend open on both devices.
+                    Keep QRDown open on both devices.
                   </p>
                 </div>
               </div>
@@ -967,7 +967,35 @@ function MainContent() {
         </div>
       </main>
 
+      <footer className="mt-auto border-t border-[#E4E4E7] bg-white py-6">
+        <div className="max-w-4xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#71717A]">
+          <div className="flex items-center gap-1.5">
+            <span>Made by</span>
+            <a
+              href="https://github.com/M-Arham07"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-[#18181B] hover:text-[#2563EB] underline underline-offset-2 transition-colors"
+            >
+              M-Arham07
+            </a>
+          </div>
 
+          <div className="flex items-center gap-4">
+            <span className="hidden sm:inline text-[#D4D4D8]">·</span>
+            <span>Zero-cloud P2P &amp; Optical QR Transfer</span>
+            <span className="text-[#D4D4D8]">·</span>
+            <a
+              href="https://github.com/M-Arham07/qrdown"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-[#18181B] transition-colors"
+            >
+              GitHub
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Background with subtle gradient & border -->
+  <rect width="512" height="512" rx="128" fill="#09090B"/>
+  <rect x="8" y="8" width="496" height="496" rx="120" stroke="#27272A" stroke-width="4"/>
+  
+  <!-- Subtle accent glow -->
+  <circle cx="256" cy="256" r="180" fill="#2563EB" fill-opacity="0.12" filter="blur(40px)"/>
+
+  <!-- Top-Left QR Corner Eye -->
+  <rect x="96" y="96" width="112" height="112" rx="24" stroke="#FFFFFF" stroke-width="20"/>
+  <rect x="136" y="136" width="32" height="32" rx="8" fill="#2563EB"/>
+
+  <!-- Top-Right QR Corner Eye -->
+  <rect x="304" y="96" width="112" height="112" rx="24" stroke="#FFFFFF" stroke-width="20"/>
+  <rect x="344" y="136" width="32" height="32" rx="8" fill="#2563EB"/>
+
+  <!-- Bottom-Left QR Corner Eye -->
+  <rect x="96" y="304" width="112" height="112" rx="24" stroke="#FFFFFF" stroke-width="20"/>
+  <rect x="136" y="344" width="32" height="32" rx="8" fill="#2563EB"/>
+
+  <!-- Center QR Matrix Dots -->
+  <rect x="236" y="104" width="40" height="40" rx="10" fill="#71717A"/>
+  <rect x="104" y="236" width="40" height="40" rx="10" fill="#71717A"/>
+  
+  <!-- The Dynamic "Down" Arrow (Bottom-Right) -->
+  <g transform="translate(260, 248)">
+    <!-- Arrow stem & head -->
+    <path d="M 96 16 L 96 120 M 52 84 L 96 128 L 140 84" 
+          stroke="#3B82F6" 
+          stroke-width="26" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"/>
+    <!-- Download base line -->
+    <path d="M 36 156 L 156 156" 
+          stroke="#60A5FA" 
+          stroke-width="22" 
+          stroke-linecap="round"/>
+  </g>
+</svg>

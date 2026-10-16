@@ -52,7 +52,7 @@ export function PairingQRCode({ code, expiresAt }: PairingQRCodeProps) {
       <div className="text-center">
         <h2 className="text-xl font-bold text-[#18181B] tracking-tight">Connect your other device</h2>
         <p className="text-xs text-[#52525B] mt-1 max-w-sm">
-          Open WebSend on your other device and scan the QR code or enter the 6-digit room code.
+          Open QRDown on your other device and scan the QR code or enter the 6-digit room code.
         </p>
       </div>
 

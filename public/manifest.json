@@ -1,0 +1,17 @@
+{
+  "name": "QRDown — Air-Gapped Optical & P2P File Transfer",
+  "short_name": "QRDown",
+  "description": "Send files offline via animated QR codes or direct WebRTC peer-to-peer. Private, instant, and encrypted.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAFAFA",
+  "theme_color": "#09090B",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

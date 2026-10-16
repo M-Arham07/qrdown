@@ -1,9 +1,9 @@
-// WebSend system constants and configurations
+// QRDown system constants and configurations
 
 export const APP_CONFIG = {
-  name: "WebSend",
+  name: "QRDown",
   version: "1.0.0",
-  description: "Direct peer-to-peer file transfer in your browser. Fast, private, no install.",
+  description: "Direct peer-to-peer and camera optical file transfer in your browser. Fast, private, no install.",
   roomTtlSeconds: 600, // 10 minutes
   reconnectGraceSeconds: 30,
   iceTimeoutMs: 25000, // 25s: generous window for TURN relay negotiation
