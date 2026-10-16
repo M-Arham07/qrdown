@@ -66,7 +66,7 @@ export async function POST(req: Request) {
 
     const transferId = generateTransferId();
     const safeName = encodeURIComponent(fileName.replace(/[^a-zA-Z0-9._-]/g, "_"));
-    const objectKey = `cli-transfers/${transferId}/${safeName}`;
+    const objectKey = `transfers/cli_${transferId}/${safeName}`;
 
     await objectStorageService.putObject(objectKey, fileBuffer, mimeType);
 
