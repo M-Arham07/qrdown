@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ReceivedText } from "@/components/ReceivedText";
+import { canPreviewText } from "@/services/textTransfer";
 import { Camera } from "lucide-react";
 import type { OpticalFileInfo } from "@/services/qrProtocol";
 import type { ScannerRequest, ScannerResponse } from "@/services/qrWorkerTypes";
@@ -17,6 +19,7 @@ export function OpticalReceiver() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState<OpticalFileInfo | null>(null);
   const [progress, setProgress] = useState({ bytes: 0, chunks: 0, speed: 0 });
+  const [receivedText, setReceivedText] = useState<Blob | null>(null);
   const [downloadUrl, setDownloadUrl] = useState("");
   const [cameraPaused, setCameraPaused] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -62,6 +65,7 @@ export function OpticalReceiver() {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     urlRef.current = "";
     setDownloadUrl("");
+    setReceivedText(null);
     setInfo(null);
     setProgress({ bytes: 0, chunks: 0, speed: 0 });
     setError("");
@@ -156,6 +160,7 @@ export function OpticalReceiver() {
           urlRef.current = url;
           setInfo(data.info);
           setDownloadUrl(url);
+          setReceivedText(canPreviewText(data.blob) ? data.blob : null);
           stop();
           setPhase("complete");
           const anchor = document.createElement("a");
@@ -351,9 +356,10 @@ export function OpticalReceiver() {
         <span>{progress.chunks} / {info.totalChunks} frames received</span>
         <span>{progress.speed > 0 ? `${(progress.speed / 1024).toFixed(1)} KB/s` : "Waiting for data"}</span>
       </div>}
+      {phase === "complete" && receivedText && <ReceivedText blob={receivedText} name={info?.name || "Received text"} />}
       {phase === "complete" && <div className="flex flex-wrap gap-3">
         <a href={downloadUrl} download={info?.name} className="btn-primary inline-flex min-h-11 items-center rounded-lg px-5 text-sm font-medium">Save file</a>
-        <button onClick={() => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); urlRef.current = ""; setDownloadUrl(""); setInfo(null); setPhase("idle"); setProgress({ bytes: 0, chunks: 0, speed: 0 }); }} className="btn-secondary min-h-11 rounded-lg px-5 text-sm">Receive another</button>
+        <button onClick={() => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); urlRef.current = ""; setDownloadUrl(""); setReceivedText(null); setInfo(null); setPhase("idle"); setProgress({ bytes: 0, chunks: 0, speed: 0 }); }} className="btn-secondary min-h-11 rounded-lg px-5 text-sm">Receive another</button>
       </div>}
       {(active || phase === "opening") && <button onClick={() => { stop(); setPhase("idle"); setInfo(null); setProgress({ bytes: 0, chunks: 0, speed: 0 }); }} className="btn-secondary min-h-11 w-full rounded-lg px-5 text-sm">Cancel</button>}
     </div>

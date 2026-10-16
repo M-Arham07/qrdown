@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Upload, Pause, Play, Maximize2 } from "lucide-react";
+import { TransferComposer } from "@/components/TransferComposer";
 import { QR_STREAM } from "@/services/qrProtocol";
 import type { OpticalFileInfo } from "@/services/qrProtocol";
 import type { EncoderRequest, EncoderResponse } from "@/services/qrWorkerTypes";
@@ -36,7 +37,7 @@ export function OpticalSender() {
     setError("");
     setFrameNumber(0);
     if (file.size > QR_STREAM.maxFileBytes) {
-      setError("Choose a file under 16 MB, or use a network transfer.");
+      setError("Choose a file up to 1 MB, or use a network transfer.");
       setPreparing(false);
       return;
     }
@@ -93,8 +94,8 @@ export function OpticalSender() {
         playback.reportedAt = now;
       }
       if (playback.playing) {
-        // Keep each frame visible long enough to be exposed by a 30 fps camera.
-        const delay = data.index === 0 ? 250 : 1000 / QR_STREAM.framesPerSecond;
+        // The worker caches ahead so the UI only paints each ready matrix.
+        const delay = data.index === 0 ? 100 : 1000 / QR_STREAM.framesPerSecond;
         timerRef.current = setTimeout(() => request({ type: "frame", index: (data.index + 1) % playback.count }), delay);
       }
     };
@@ -127,9 +128,10 @@ export function OpticalSender() {
           className="flex min-h-48 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-300 px-5 py-8 text-center transition-colors hover:border-blue-700 hover:bg-zinc-50">
           <Upload className="h-6 w-6 text-zinc-500" aria-hidden="true" />
           <span className="text-sm font-medium text-zinc-950">Choose a file</span>
-          <span className="text-sm text-zinc-600">Or drop it here. Compression is automatic.</span>
+          <span className="text-sm text-zinc-600">Up to 1 MB. Compression is automatic.</span>
         </button>
       )}
+      {!info && !preparing && <TransferComposer maxBytes={QR_STREAM.maxFileBytes} actionLabel="Start QR transfer" onAdd={files => chooseFile(files[0])} />}
       {preparing && <p className="py-12 text-center text-sm text-zinc-600" role="status">Preparing file…</p>}
       {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
       <div ref={stageRef} className={`${info ? "block" : "hidden"} bg-white fullscreen:flex fullscreen:h-screen fullscreen:flex-col fullscreen:items-center fullscreen:justify-center fullscreen:p-4 [&:fullscreen_canvas]:max-w-[min(90vw,85vh)]`}>

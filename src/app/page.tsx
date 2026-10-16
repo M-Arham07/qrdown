@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useEffectEvent, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { ReceivedText } from "@/components/ReceivedText";
+import { canPreviewText } from "@/services/textTransfer";
 import { Header } from "@/components/Header";
 import { FilePicker } from "@/components/FilePicker";
 import { PairingQRCode } from "@/components/PairingQRCode";
@@ -26,6 +28,7 @@ function MainContent() {
   const [transferMode, setTransferMode] = useState<"network" | "optical">("network");
   const [activeTab, setActiveTab] = useState<"send" | "receive">(searchParams.get("code") ? "receive" : "send");
   const [codeInputValue, setCodeInputValue] = useState(searchParams.get("code") || "");
+  const [receivedTexts, setReceivedTexts] = useState<{ blob: Blob; name: string; id: string }[]>([]);
   const [isJoining, setIsJoining] = useState(false);
 
   const {
@@ -590,6 +593,7 @@ function MainContent() {
     if (operation.signal.aborted) return;
     // Trigger download
     fileTransferService.downloadBlob(fullBlob, targetFile.name);
+    if (canPreviewText(fullBlob)) setReceivedTexts(previous => [...previous.slice(-4), { blob: fullBlob, name: targetFile.name, id: targetFile.id }]);
     toast.success(`Download ready: ${targetFile.name}`);
 
     // Reset buffer for next file
@@ -664,7 +668,7 @@ function MainContent() {
 
     try {
       toast.info("Downloading encrypted file...");
-      await cloudFallbackService.downloadAndDecryptFile({
+      const downloaded = await cloudFallbackService.downloadAndDecryptFile({
         metadata: msg.files[0],
         downloadUrl: msg.downloadUrl,
         encryptionKeyJwk: msg.encryptionKeyJwk,
@@ -681,6 +685,7 @@ function MainContent() {
         type: "transfer:completed", fileId: msg.files[0].id, checksumVerified: true,
       });
       operation.signal.throwIfAborted();
+      if (canPreviewText(downloaded)) setReceivedTexts(previous => [...previous.slice(-4), { blob: downloaded, name: msg.files[0].name, id: msg.files[0].id }]);
       setState("COMPLETED");
       toast.success("Download ready");
     } catch (err: unknown) {
@@ -714,6 +719,7 @@ function MainContent() {
   const handleReset = () => {
     cleanupConnections();
     resetTransfer();
+    setReceivedTexts([]);
     resetSession();
     setActiveTab("send");
     incomingChunksRef.current = [];
@@ -766,7 +772,7 @@ function MainContent() {
           <div className="mb-6 text-center sm:text-left">
             <h1 className="text-3xl font-semibold tracking-tight">
               {transferMode === "network"
-                ? "Send files between devices."
+                ? "Send files and text between devices."
                 : "Send files by QR."}
             </h1>
             <p className="mt-2 text-sm text-[#52525B]">
@@ -940,6 +946,8 @@ function MainContent() {
             {(state === "PAIRING" || state === "NEGOTIATING") && (
               <button onClick={handleCancel} className="btn-secondary mt-6 w-full rounded-lg px-4 py-3 text-sm">Cancel</button>
             )}
+
+            {state === "COMPLETED" && receivedTexts.map(item => <div key={item.id} className="mb-4"><ReceivedText blob={item.blob} name={item.name} /></div>)}
 
             {/* COMPLETED / CANCELLED / ERROR state */}
             {(state === "COMPLETED" || state === "CANCELLED" || state === "ERROR") && (

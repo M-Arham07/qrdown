@@ -1,9 +1,9 @@
 // QR stream v2: gzip when useful, QR alphanumeric encoding, SHA-256 verification.
 export const QR_STREAM = {
   chunkBytes: 640,
-  framesPerSecond: 10,
+  framesPerSecond: 20,
   headerInterval: 16,
-  maxFileBytes: 16 * 1024 * 1024,
+  maxFileBytes: 1_000_000,
 } as const;
 
 export interface OpticalFileInfo {
@@ -70,7 +70,7 @@ async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 export async function createOpticalFrames(file: File): Promise<{ frames: string[]; fileInfo: OpticalFileInfo }> {
-  if (file.size > QR_STREAM.maxFileBytes) throw new Error("QR transfer supports files up to 16 MB. Use a network transfer for larger files.");
+  if (file.size > QR_STREAM.maxFileBytes) throw new Error("QR transfer supports files up to 1 MB. Use a network transfer for larger files.");
   const original = new Uint8Array(await file.arrayBuffer());
   const checksum = await digest(original);
   let bytes = original;

@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useTransferStore } from "@/stores/useTransferStore";
+import { TransferComposer } from "@/components/TransferComposer";
 import { Upload, File as FileIcon, X, ArrowRight } from "lucide-react";
 
 interface FilePickerProps {
@@ -78,6 +79,8 @@ export function FilePicker({ onStartSharing }: FilePickerProps) {
           </p>
         </div>
       </div>
+
+      <TransferComposer onAdd={addFiles} />
 
       {/* Selected Files List */}
       {selectedFiles.length > 0 && (
