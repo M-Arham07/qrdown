@@ -1,4 +1,6 @@
-// QR stream v2: gzip when useful, QR alphanumeric encoding, SHA-256 verification.
+import { encodeRepair, fountainDistribution } from "./qrFountain";
+
+// QR stream v3: fountain repair packets, gzip when useful, QR alphanumeric encoding, SHA-256 verification.
 export const QR_STREAM = {
   chunkBytes: 640,
   framesPerSecond: 20,
@@ -17,6 +19,7 @@ export interface OpticalFileInfo {
   compression: "none" | "gzip";
   encoding: "base45" | "base64";
   checksum?: string;
+  fountain?: boolean;
 }
 export interface QRHeaderFrame {
   type: "HEADER";
@@ -28,9 +31,25 @@ export interface QRChunkFrame {
   index: number;
   bytes: Uint8Array<ArrayBuffer>;
 }
-export type QRFrame = QRHeaderFrame | QRChunkFrame;
+export interface QRRepairFrame {
+  type: "REPAIR";
+  id: string;
+  seed: number;
+  bytes: Uint8Array<ArrayBuffer>;
+}
+export type QRFrame = QRHeaderFrame | QRChunkFrame | QRRepairFrame;
 const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 const values = new Map([...alphabet].map((char, index) => [char, index]));
+const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
+  for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  return value >>> 0;
+});
+function frameChecksum(text: string): string {
+  let crc = 0xffffffff;
+  for (let i = 0; i < text.length; i++) crc = crcTable[(crc ^ text.charCodeAt(i)) & 255] ^ (crc >>> 8);
+  return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0").toUpperCase();
+}
+function sealFrame(text: string): string { return `${text}:${frameChecksum(text)}`; }
 
 export function encodeBase45(bytes: Uint8Array): string {
   const parts: string[] = [];
@@ -69,7 +88,7 @@ async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
-export async function createOpticalFrames(file: File): Promise<{ frames: string[]; fileInfo: OpticalFileInfo }> {
+export async function createOpticalFrames(file: File): Promise<{ frameAt: (index: number) => string; largestFrame: string; fileInfo: OpticalFileInfo }> {
   if (file.size > QR_STREAM.maxFileBytes) throw new Error("QR transfer supports files up to 1 MB. Use a network transfer for larger files.");
   const original = new Uint8Array(await file.arrayBuffer());
   const checksum = await digest(original);
@@ -90,25 +109,41 @@ export async function createOpticalFrames(file: File): Promise<{ frames: string[
     id: crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase(),
     name: file.name, type: file.type || "application/octet-stream", size: file.size,
     transferSize: bytes.length, totalChunks: Math.max(1, Math.ceil(bytes.length / QR_STREAM.chunkBytes)),
-    chunkSize: QR_STREAM.chunkBytes, compression, encoding: "base45", checksum,
+    chunkSize: QR_STREAM.chunkBytes, compression, encoding: "base45", checksum, fountain: true,
   };
   const metadata = JSON.stringify([fileInfo.name, fileInfo.type, fileInfo.size, bytes.length,
     fileInfo.totalChunks, fileInfo.chunkSize, compression, checksum]);
-  const header = `WS2:H:${fileInfo.id}:${encodeBase45(new TextEncoder().encode(metadata))}`;
-  const frames = [header];
-  for (let index = 0; index < fileInfo.totalChunks; index++) {
-    const chunk = bytes.subarray(index * fileInfo.chunkSize, (index + 1) * fileInfo.chunkSize);
-    frames.push(`WS2:C:${fileInfo.id}:${index.toString(36).toUpperCase()}:${encodeBase45(chunk)}`);
-    // A receiver can join mid-stream without waiting for a complete file cycle.
-    if ((index + 1) % QR_STREAM.headerInterval === 0 && index + 1 < fileInfo.totalChunks) frames.push(header);
-  }
-  return { frames, fileInfo };
+  const header = sealFrame(`WS3:H:${fileInfo.id}:${encodeBase45(new TextEncoder().encode(metadata))}`);
+  const blocks = Array.from({ length: fileInfo.totalChunks }, (_, index) =>
+    bytes.subarray(index * fileInfo.chunkSize, (index + 1) * fileInfo.chunkSize));
+  const cdf = fountainDistribution(blocks.length);
+  const systematic = (index: number) => sealFrame(`WS3:C:${fileInfo.id}:${index.toString(36).toUpperCase()}:${encodeBase45(blocks[index])}`);
+  const frameAt = (index: number): string => {
+    if (!Number.isSafeInteger(index) || index < 0 || index > 0xffffffff) throw new Error("Invalid frame index");
+    if (index % (QR_STREAM.headerInterval + 1) === 0) return header;
+    const packet = index - Math.floor(index / (QR_STREAM.headerInterval + 1)) - 1;
+    if (blocks.length === 1) return systematic(0);
+    if (packet < blocks.length) return systematic(packet);
+    const repair = packet - blocks.length;
+    // Occasional systematic packets keep very slow cameras making progress too.
+    if (repair % 8 === 7) return systematic(Math.floor(repair / 8) % blocks.length);
+    return sealFrame(`WS3:R:${fileInfo.id}:${repair.toString(36).toUpperCase()}:${encodeBase45(encodeRepair(blocks, fileInfo.chunkSize, repair, cdf))}`);
+  };
+  const largestData = blocks.length === 1 ? systematic(0)
+    : sealFrame(`WS3:R:${fileInfo.id}:1Z141Z3:${encodeBase45(new Uint8Array(fileInfo.chunkSize))}`);
+  return { frameAt, largestFrame: header.length > largestData.length ? header : largestData, fileInfo };
+
 }
 
 export function parseOpticalFrame(raw: string): QRFrame | null {
   if (raw.length > 5000) return null;
   try {
-    const header = /^WS2:H:([A-F0-9]{12}):(.*)$/.exec(raw);
+    if (raw.startsWith("WS3:")) {
+      const body = raw.slice(0, -9);
+      if (raw.at(-9) !== ":" || raw.slice(-8) !== frameChecksum(body)) return null;
+      raw = body;
+    }
+    const header = /^WS[23]:H:([A-F0-9]{12}):(.*)$/.exec(raw);
     if (header) {
       const metadata: unknown = JSON.parse(new TextDecoder().decode(decodeBase45(header[2])));
       if (!Array.isArray(metadata) || metadata.length !== 8) return null;
@@ -120,9 +155,16 @@ export function parseOpticalFrame(raw: string): QRFrame | null {
         !["none", "gzip"].includes(compression) || (compression === "none" && size !== transferSize) ||
         typeof checksum !== "string" || !/^[A-F0-9]{64}$/.test(checksum)) return null;
       return { type: "HEADER", info: { id: header[1], name, type, size, transferSize, totalChunks,
-        chunkSize, compression, encoding: "base45", checksum } };
+        chunkSize, compression, encoding: "base45", checksum, fountain: raw.startsWith("WS3:") } };
     }
-    const chunk = /^WS2:C:([A-F0-9]{12}):([0-9A-Z]{1,6}):(.*)$/.exec(raw);
+    const repair = /^WS3:R:([A-F0-9]{12}):([0-9A-Z]{1,7}):(.*)$/.exec(raw);
+    if (repair) {
+      const seed = parseInt(repair[2], 36);
+      const bytes = decodeBase45(repair[3]);
+      if (seed > 0xffffffff || bytes.length !== QR_STREAM.chunkBytes) return null;
+      return { type: "REPAIR", id: repair[1], seed, bytes };
+    }
+    const chunk = /^WS[23]:C:([A-F0-9]{12}):([0-9A-Z]{1,6}):(.*)$/.exec(raw);
     if (chunk) {
       const bytes = decodeBase45(chunk[3]);
       if (bytes.length > QR_STREAM.chunkBytes) return null;

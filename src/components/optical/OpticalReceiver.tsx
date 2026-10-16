@@ -113,9 +113,21 @@ export function OpticalReceiver() {
         setError("The QR scanner could not start. Please update your browser and try again.");
       };
       let captureRegion = { x: 0, y: 0, width: 1, height: 1, outputWidth: 1, outputHeight: 1 };
+      let trackedRegion: { x: number; y: number; width: number; height: number; at: number } | null = null;
       const drawOutline = (corners: { x: number; y: number }[]) => {
         const outline = outlineRef.current;
         if (!outline || corners.length !== 4) return;
+        const width = videoRef.current?.videoWidth || 1;
+        const height = videoRef.current?.videoHeight || 1;
+        const left = Math.min(...corners.map(point => point.x));
+        const top = Math.min(...corners.map(point => point.y));
+        const right = Math.max(...corners.map(point => point.x));
+        const bottom = Math.max(...corners.map(point => point.y));
+        const padding = Math.max(right - left, bottom - top) * 0.2;
+        const x = Math.max(0, left - padding);
+        const y = Math.max(0, top - padding);
+        trackedRegion = { x, y, width: Math.min(width, right + padding) - x,
+          height: Math.min(height, bottom + padding) - y, at: performance.now() };
         if (outlineTimerRef.current) clearTimeout(outlineTimerRef.current);
         outline.width = videoRef.current?.videoWidth || 1;
         outline.height = videoRef.current?.videoHeight || 1;
@@ -232,17 +244,22 @@ export function OpticalReceiver() {
       let sentAt = 0;
       let missed = 0;
       let lastNativeCode = "";
+      let nativeRetryAt = 0;
+      let captures = 0;
       const schedule = () => {
         if (!runningRef.current || generation !== generationRef.current) return;
         // RAF also recovers after backgrounding on browsers with stalled video-frame callbacks.
         scheduleRef.current = requestAnimationFrame(() => { void scan(); });
       };
       const capture = () => {
-        // Alternate a sharp center crop with the full view so off-center codes aren't clipped.
+        // Follow the last decoded QR; regularly search the full view to recover movement.
+        const tracking = trackedRegion && performance.now() - trackedRegion.at < 1000 && ++captures % 8 !== 0;
         const square = Math.min(video.videoWidth, video.videoHeight);
-        const width = fullFrame ? video.videoWidth : square;
-        const height = fullFrame ? video.videoHeight : square;
-        const scale = Math.min(1, 960 / Math.max(width, height));
+        const width = tracking ? trackedRegion!.width : fullFrame ? video.videoWidth : square;
+        const height = tracking ? trackedRegion!.height : fullFrame ? video.videoHeight : square;
+        const x = tracking ? trackedRegion!.x : (video.videoWidth - width) / 2;
+        const y = tracking ? trackedRegion!.y : (video.videoHeight - height) / 2;
+        const scale = Math.min(1, (tracking ? 640 : 960) / Math.max(width, height));
         const canvas = canvasRef.current ??= document.createElement("canvas");
         const outputWidth = Math.max(1, Math.round(width * scale));
         const outputHeight = Math.max(1, Math.round(height * scale));
@@ -250,10 +267,10 @@ export function OpticalReceiver() {
         if (canvas.height !== outputHeight) canvas.height = outputHeight;
         const context = canvas.getContext("2d", { willReadFrequently: true });
         if (!context) throw new Error("Camera image processing is unavailable");
-        context.drawImage(video, (video.videoWidth - width) / 2, (video.videoHeight - height) / 2,
+        context.drawImage(video, x, y,
           width, height, 0, 0, outputWidth, outputHeight);
         const image = context.getImageData(0, 0, outputWidth, outputHeight);
-        captureRegion = { x: (video.videoWidth - width) / 2, y: (video.videoHeight - height) / 2,
+        captureRegion = { x, y,
           width, height, outputWidth, outputHeight };
         worker.postMessage({ type: "scanPixels", pixels: image.data, width: outputWidth, height: outputHeight } satisfies ScannerRequest, [image.data.buffer]);
         fullFrame = !fullFrame;
@@ -276,7 +293,7 @@ export function OpticalReceiver() {
         sentAt = performance.now();
         try {
           let code: { rawValue: string; cornerPoints?: { x: number; y: number }[] } | undefined;
-          if (detectorRef.current && missed < 3) {
+          if (detectorRef.current && performance.now() >= nativeRetryAt) {
             let timeout: ReturnType<typeof setTimeout> | undefined;
             try {
               const codes = await Promise.race([
@@ -284,13 +301,13 @@ export function OpticalReceiver() {
                 new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("Decoder timeout")), 500); }),
               ]);
               if (generation !== generationRef.current) return;
-              code = codes.find(candidate => candidate.rawValue.startsWith("WS2:") || candidate.rawValue.startsWith("WS1|"));
+              code = codes.find(candidate => candidate.rawValue.startsWith("WS3:") || candidate.rawValue.startsWith("WS2:") || candidate.rawValue.startsWith("WS1|"));
               if (code && code.rawValue !== lastNativeCode) {
                 missed = 0;
                 lastNativeCode = code.rawValue;
               } else missed++;
               // Some native decoders keep returning a cached symbol after the screen changes.
-              if (missed >= 3) code = undefined;
+              if (missed >= 3) { code = undefined; missed = 0; nativeRetryAt = performance.now() + 1500; }
             } catch { detectorRef.current = null; }
             finally { if (timeout) clearTimeout(timeout); }
           }

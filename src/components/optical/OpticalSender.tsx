@@ -18,7 +18,7 @@ export function OpticalSender() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const playbackRef = useRef({ playing: true, index: 0, count: 0, reportedAt: 0 });
+  const playbackRef = useRef({ playing: true, index: 0, reportedAt: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
   useWakeLock(!!info && playing);
 
@@ -43,7 +43,7 @@ export function OpticalSender() {
     }
     setPreparing(true);
     setPlaying(true);
-    playbackRef.current = { playing: true, index: 0, count: 0, reportedAt: 0 };
+    playbackRef.current = { playing: true, index: 0, reportedAt: 0 };
     const worker = new Worker(new URL("../../workers/qrEncoder.worker.ts", import.meta.url), { type: "module" });
     workerRef.current = worker;
     const request = (message: EncoderRequest) => worker.postMessage(message);
@@ -68,7 +68,6 @@ export function OpticalSender() {
       if (data.type === "ready") {
         setInfo(data.info);
         setPreparing(false);
-        playbackRef.current.count = data.frameCount;
         request({ type: "frame", index: 0 });
         return;
       }
@@ -90,13 +89,13 @@ export function OpticalSender() {
       playback.index = data.index;
       const now = performance.now();
       if (now - playback.reportedAt > 250) {
-        setFrameNumber(data.chunkIndex === null ? 0 : data.chunkIndex + 1);
+        setFrameNumber(data.index + 1);
         playback.reportedAt = now;
       }
       if (playback.playing) {
         // The worker caches ahead so the UI only paints each ready matrix.
         const delay = data.index === 0 ? 100 : 1000 / QR_STREAM.framesPerSecond;
-        timerRef.current = setTimeout(() => request({ type: "frame", index: (data.index + 1) % playback.count }), delay);
+        timerRef.current = setTimeout(() => request({ type: "frame", index: data.index + 1 }), delay);
       }
     };
     request({ type: "prepare", file });
@@ -107,7 +106,7 @@ export function OpticalSender() {
     playback.playing = !playback.playing;
     setPlaying(playback.playing);
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (playback.playing) workerRef.current?.postMessage({ type: "frame", index: (playback.index + 1) % playback.count } satisfies EncoderRequest);
+    if (playback.playing) workerRef.current?.postMessage({ type: "frame", index: playback.index + 1 } satisfies EncoderRequest);
   };
   const reset = () => {
     workerRef.current?.terminate();
@@ -120,6 +119,7 @@ export function OpticalSender() {
 
   return (
     <div className="space-y-5">
+      {!info && !preparing && <TransferComposer maxBytes={QR_STREAM.maxFileBytes} actionLabel="Start QR transfer" onAdd={files => chooseFile(files[0])} />}
       <input ref={inputRef} type="file" aria-label="File to send by QR" className="hidden"
         onChange={event => { chooseFile(event.target.files?.[0]); event.target.value = ""; }} />
       {!info && !preparing && (
@@ -131,7 +131,6 @@ export function OpticalSender() {
           <span className="text-sm text-zinc-600">Up to 1 MB. Compression is automatic.</span>
         </button>
       )}
-      {!info && !preparing && <TransferComposer maxBytes={QR_STREAM.maxFileBytes} actionLabel="Start QR transfer" onAdd={files => chooseFile(files[0])} />}
       {preparing && <p className="py-12 text-center text-sm text-zinc-600" role="status">Preparing file…</p>}
       {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
       <div ref={stageRef} className={`${info ? "block" : "hidden"} bg-white fullscreen:flex fullscreen:h-screen fullscreen:flex-col fullscreen:items-center fullscreen:justify-center fullscreen:p-4 [&:fullscreen_canvas]:max-w-[min(90vw,85vh)]`}>
@@ -145,7 +144,7 @@ export function OpticalSender() {
               <p className="truncate font-medium text-zinc-950">{info.name}</p>
               <p className="mt-1 text-zinc-600">{(info.size / 1024).toFixed(1)} KB{info.compression === "gzip" && ` · ${Math.round((1 - info.transferSize / info.size) * 100)}% smaller`}</p>
             </div>
-            <span className="shrink-0 text-xs tabular-nums text-zinc-600">{frameNumber ? `${frameNumber} / ${info.totalChunks}` : "File details"}</span>
+            <span className="shrink-0 text-xs tabular-nums text-zinc-600">{frameNumber ? `Frame ${frameNumber}` : "File details"}</span>
           </div>
           <p className="text-sm leading-relaxed text-zinc-600">Point the receiving camera at this code. Keep it open until the receiver reaches 100%.</p>
           <div className="flex flex-wrap gap-2">

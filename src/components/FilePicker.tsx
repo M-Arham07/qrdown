@@ -31,6 +31,8 @@ export function FilePicker({ onStartSharing }: FilePickerProps) {
 
   return (
     <div className="w-full flex flex-col gap-5">
+      <TransferComposer onAdd={addFiles} />
+
       {/* Drag & Drop Area */}
       <div
         onDragOver={(e) => {
@@ -79,8 +81,6 @@ export function FilePicker({ onStartSharing }: FilePickerProps) {
           </p>
         </div>
       </div>
-
-      <TransferComposer onAdd={addFiles} />
 
       {/* Selected Files List */}
       {selectedFiles.length > 0 && (

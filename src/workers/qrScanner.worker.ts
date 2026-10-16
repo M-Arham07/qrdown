@@ -1,6 +1,7 @@
+import { FountainDecoder } from "../services/qrFountain";
 import jsQR from "jsqr";
 import { assembleOpticalFile, parseOpticalFrame } from "../services/qrProtocol";
-import type { OpticalFileInfo, QRChunkFrame } from "../services/qrProtocol";
+import type { OpticalFileInfo, QRChunkFrame, QRRepairFrame } from "../services/qrProtocol";
 import type { ScannerRequest, ScannerResponse } from "../services/qrWorkerTypes";
 
 let info: OpticalFileInfo | null = null;
@@ -9,8 +10,9 @@ let bytes = 0;
 let finishing = false;
 let finished = false;
 let lastReport = 0;
+let recovery: FountainDecoder | null = null;
 // Retain early frames until a repeated header arrives. Never mix transfer IDs.
-const early: QRChunkFrame[] = [];
+const early: (QRChunkFrame | QRRepairFrame)[] = [];
 function send(message: ScannerResponse) { self.postMessage(message); }
 function addChunk(frame: QRChunkFrame) {
   if (!info || frame.id !== info.id || frame.index < 0 || frame.index >= info.totalChunks || chunks.has(frame.index)) return;
@@ -22,6 +24,13 @@ function addChunk(frame: QRChunkFrame) {
   chunks.set(frame.index, frame.bytes);
   bytes += frame.bytes.length;
 }
+function accept(frame: QRChunkFrame | QRRepairFrame) {
+  if (!info || frame.id !== info.id) return;
+  if (frame.type === "REPAIR") { recovery?.addRepair(frame.seed, frame.bytes); return; }
+  if (!recovery) { addChunk(frame); return; }
+  const expected = Math.min(info.chunkSize, info.transferSize - frame.index * info.chunkSize);
+  if (frame.index < info.totalChunks && frame.bytes.length === expected) recovery.addSystematic(frame.index, frame.bytes);
+}
 async function consume(text: string) {
   if (finished || finishing) return;
   const frame = parseOpticalFrame(text);
@@ -32,14 +41,21 @@ async function consume(text: string) {
     if (!info) {
       info = frame.info;
       if (info.compression === "gzip" && typeof DecompressionStream === "undefined") throw new Error("Update your browser to receive compressed files");
-      for (const chunk of early) addChunk(chunk);
+      if (info.fountain) {
+        const metadata = info;
+        recovery = new FountainDecoder(info.totalChunks, info.chunkSize, (index, padded) => {
+          const length = Math.min(metadata.chunkSize, metadata.transferSize - index * metadata.chunkSize);
+          addChunk({ type: "CHUNK", id: metadata.id, index, bytes: padded.slice(0, length) });
+        });
+      }
+      for (const chunk of early) accept(chunk);
       early.length = 0;
       send({ type: "progress", info, bytes, chunks: chunks.size, verifying: false });
     }
   } else if (!info) {
     if (early.length >= 64) early.shift();
     early.push(frame);
-  } else addChunk(frame);
+  } else accept(frame);
   if (!info) return;
   const now = performance.now();
   if (chunks.size === info.totalChunks) {
@@ -48,6 +64,7 @@ async function consume(text: string) {
     const blob = await assembleOpticalFile(info, chunks);
     finished = true;
     chunks = new Map();
+    recovery = null;
     send({ type: "complete", info, blob });
   } else if (now - lastReport >= 150) {
     lastReport = now;
@@ -64,7 +81,7 @@ self.onmessage = async ({ data }: MessageEvent<ScannerRequest>) => {
       try {
         code = jsQR(data.pixels, data.width, data.height, { inversionAttempts: "dontInvert" });
       } catch { /* An unreadable camera frame must not discard the transfer. */ }
-      if (code?.data && (code.data.startsWith("WS2:") || code.data.startsWith("WS1|"))) {
+      if (code?.data && (code.data.startsWith("WS3:") || code.data.startsWith("WS2:") || code.data.startsWith("WS1|"))) {
         const { topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner } = code.location;
         send({ type: "located", corners: [topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner] });
         await consume(code.data);
@@ -73,6 +90,7 @@ self.onmessage = async ({ data }: MessageEvent<ScannerRequest>) => {
   } catch (error) {
     finished = true;
     chunks.clear();
+    recovery = null;
     send({ type: "error", message: error instanceof Error ? error.message : "Could not read QR stream" });
   } finally { send({ type: "scanned" }); }
 };

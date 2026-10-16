@@ -2,7 +2,7 @@ import type { OpticalFileInfo } from "./qrProtocol";
 
 export type EncoderRequest = { type: "prepare"; file: File } | { type: "frame"; index: number };
 export type EncoderResponse =
-  | { type: "ready"; info: OpticalFileInfo; frameCount: number }
+  | { type: "ready"; info: OpticalFileInfo }
   | { type: "frame"; index: number; size: number; modules: Uint8Array; chunkIndex: number | null }
   | { type: "error"; message: string };
 export type ScannerRequest =
