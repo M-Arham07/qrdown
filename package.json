@@ -13,6 +13,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1151.0",
     "@upstash/ratelimit": "^2.2.0",
     "@upstash/redis": "^1.39.0",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.57.0",
     "nanoid": "^6.0.2",
     "next": "16.4.1",

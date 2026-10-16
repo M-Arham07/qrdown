@@ -7,46 +7,38 @@ export const APP_CONFIG = {
   roomTtlSeconds: 600, // 10 minutes
   reconnectGraceSeconds: 30,
   iceTimeoutMs: 25000, // 25s: generous window for TURN relay negotiation
-  // DataChannel tuning — 64 KiB chunks give ~3–4x better throughput than 16 KiB
-  chunkSizeBytes: 64 * 1024,       // 64 KiB per chunk
-  bufferThresholdBytes: 4 * 1024 * 1024, // 4 MiB backpressure limit for high throughput
+  // Reserve four bytes of the 64 KiB message budget for the chunk index.
+  chunkSizeBytes: 64 * 1024 - 4,
+  bufferThresholdBytes: 4 * 1024 * 1024, // 4 MiB send buffer limit
   maxCloudSizeBytes: 100 * 1024 * 1024, // 100 MB max for cloud fallback
   cloudRetentionHours: 24,
   presignedUrlTtlSeconds: 900, // 15 mins
 };
 
-// ICE server chain: multiple free STUN + public TURN fallbacks
-// Free TURN courtesy of Metered.ca open relay and numb.viagenie.ca
-// Note: for production, set up dedicated TURN via Metered, Twilio, or coturn.
+// Public shortlist from the supplied community list (including its comments):
+// https://gist.github.com/sagivo/3a4b2f2c7ac6e1b5267c2f1f59ac6c6b
+// Keep the shortlist small so obsolete hosts do not multiply ICE requests.
+// These services have no availability guarantee; configured TURN takes precedence.
 export const STUN_SERVERS: RTCIceServer[] = [
-  // Google STUN (most reliable)
+  // Google STUN entries from the list.
   {
     urls: [
       "stun:stun.l.google.com:19302",
       "stun:stun1.l.google.com:19302",
-      "stun:stun2.l.google.com:19302",
-      "stun:stun3.l.google.com:19302",
     ],
   },
-  // Mozilla STUN
-  { urls: "stun:stun.services.mozilla.com" },
-  // Twilio STUN
-  { urls: "stun:global.stun.twilio.com:3478" },
+  // Independent providers listed in the comments.
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:freestun.net:3478" },
 ];
 
-// Free public TURN servers — these are best-effort community relays.
-// Replace with dedicated Metered/Twilio credentials for production SLA.
+// Public credentials from the community list. These are unverified fallbacks,
+// not application secrets or substitutes for a working dedicated relay.
 export const TURN_SERVERS: RTCIceServer[] = [
-  // Metered.ca free open TURN (no auth required for short-duration relay)
   {
-    urls: [
-      "turn:a.relay.metered.ca:80",
-      "turn:a.relay.metered.ca:80?transport=tcp",
-      "turn:a.relay.metered.ca:443",
-      "turn:a.relay.metered.ca:443?transport=tcp",
-    ],
-    username: "open",
-    credential: "open",
+    urls: "turn:freestun.net:3478",
+    username: "free",
+    credential: "free",
   },
   // OpenRelay project
   {

@@ -7,6 +7,9 @@ import { nanoid } from "nanoid";
 
 export async function POST(req: Request) {
   try {
+    if (process.env.NODE_ENV === "production" && !r2Service.isConfigured()) {
+      return NextResponse.json({ error: "Cloud storage is not configured" }, { status: 503 });
+    }
     const body = await req.json();
     const { roomId, secret, fileName, fileSize, contentType } = body;
 
@@ -24,6 +27,10 @@ export async function POST(req: Request) {
     const session = await sessionStore.get<RoomSession>(`room:${roomId}`);
     if (!session || session.secret !== secret) {
       return NextResponse.json({ error: "Unauthorized session credentials" }, { status: 403 });
+    }
+
+    if (await sessionStore.get(`cancelled:${roomId}`)) {
+      return NextResponse.json({ error: "Session cancelled" }, { status: 410 });
     }
 
     const objectKey = `transfers/${roomId}/${nanoid()}_enc_${encodeURIComponent(fileName)}`;

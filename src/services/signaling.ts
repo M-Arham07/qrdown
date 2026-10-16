@@ -1,7 +1,7 @@
 import { PeerRole } from "@/types/session";
 import { SignalEnvelope, SignalMessage } from "@/types/signaling";
 
-type SignalListener = (msg: SignalMessage, env: SignalEnvelope) => void;
+type SignalListener = (msg: SignalMessage, env: SignalEnvelope) => void | Promise<void>;
 
 /**
  * Long-poll signaling client.
@@ -17,6 +17,8 @@ export class SignalingClient {
   private secret: string;
   private role: PeerRole;
   private lastTimestamp = 0;
+  private seenSignals = new Set<string>();
+  private sendQueue: Promise<void> = Promise.resolve();
   private polling = false;
   private pollTimeout: NodeJS.Timeout | null = null;
   private listeners: Set<SignalListener> = new Set();
@@ -59,24 +61,45 @@ export class SignalingClient {
     this.fastMode = fast;
   }
 
-  public async send(message: SignalMessage) {
-    try {
-      const res = await fetch("/api/sessions/signal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roomId: this.roomId,
-          secret: this.secret,
-          fromRole: this.role,
-          message,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        console.warn("[Signaling] Send failed:", data);
+  public send(message: SignalMessage): Promise<void> {
+    // Preserve approval/offer/candidate order even when HTTP requests vary in latency.
+    const request = this.sendQueue.then(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!this.polling) return;
+        try {
+          const res = await fetch("/api/sessions/signal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(5000),
+            body: JSON.stringify({ roomId: this.roomId, secret: this.secret,
+              fromRole: this.role, message }),
+          });
+          if (res.ok) return;
+          if (res.status < 500) throw new Error(`Signaling rejected (${res.status})`);
+        } catch (error) {
+          if (attempt === 2) throw error;
+        }
       }
-    } catch (err) {
-      console.error("[Signaling] Failed to send signal:", err);
+      throw new Error("Signaling unavailable after retries");
+    });
+    this.sendQueue = request.catch((error) => console.error("[Signaling] Send failed:", error));
+    return this.sendQueue;
+  }
+
+  public async cancel(): Promise<void> {
+    // Cancellation bypasses queued ICE messages and survives stop().
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch("/api/sessions/cancel", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(5000), keepalive: true,
+          body: JSON.stringify({ roomId: this.roomId, secret: this.secret }),
+        });
+        if (response.ok) return;
+        throw new Error(`Cancellation failed (${response.status})`);
+      } catch (error) {
+        if (attempt === 2) throw error;
+      }
     }
   }
 
@@ -87,7 +110,7 @@ export class SignalingClient {
       const res = await fetch(
         `/api/sessions/signal?roomId=${encodeURIComponent(this.roomId)}&secret=${encodeURIComponent(
           this.secret
-        )}&role=${this.role}&since=${this.lastTimestamp}`,
+        )}&role=${this.role}&since=${Math.max(0, this.lastTimestamp - 2000)}`,
         {
           // Abort if the server takes > 5s to respond
           signal: AbortSignal.timeout(5000),
@@ -97,18 +120,31 @@ export class SignalingClient {
       if (res.ok) {
         this.consecutiveErrors = 0;
         const data = await res.json();
+        if (!this.polling) return;
+        if (data.session?.status === "closed") {
+          const envelope: SignalEnvelope = {
+            id: `cancel:${this.roomId}`, roomId: this.roomId,
+            fromRole: this.role === "sender" ? "receiver" : "sender",
+            timestamp: data.timestamp ?? 0,
+            message: { type: "transfer:cancel" },
+          };
+          for (const listener of this.listeners) await listener(envelope.message, envelope);
+          this.stop();
+          return;
+        }
         if (data.signals && Array.isArray(data.signals)) {
           for (const env of data.signals as SignalEnvelope[]) {
-            if (env.timestamp > this.lastTimestamp) {
-              this.lastTimestamp = env.timestamp;
-            }
-            this.listeners.forEach((listener) => {
+            if (!this.polling) return;
+            if (this.seenSignals.has(env.id)) continue;
+            this.seenSignals.add(env.id);
+            this.lastTimestamp = Math.max(this.lastTimestamp, env.timestamp);
+            for (const listener of this.listeners) {
               try {
-                listener(env.message, env);
+                await listener(env.message, env);
               } catch (e) {
                 console.error("[Signaling] Listener error:", e);
               }
-            });
+            }
           }
         }
       } else {

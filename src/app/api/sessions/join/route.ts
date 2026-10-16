@@ -37,16 +37,23 @@ export async function POST(req: Request) {
     }
 
     // If joining with roomId directly, verify secret matches if provided
-    if (secret && session.secret !== secret) {
+    if ((!code && !secret) || (secret && session.secret !== secret)) {
       return NextResponse.json({ error: "Invalid room credentials." }, { status: 403 });
     }
 
-    // Attach receiver
+    if (session.status === "closed" || await sessionStore.get(`cancelled:${targetRoomId}`)) {
+      return NextResponse.json({ error: "Session cancelled" }, { status: 410 });
+    }
+    if (session.receiver && session.receiver.id !== device?.id) {
+      return NextResponse.json({ error: "Another device has already joined" }, { status: 409 });
+    }
+    // Possession of the pairing code authorizes this transfer.
     session.receiver = device;
-    session.status = "paired";
+    session.status = "active";
+    session.approved = true;
     await sessionStore.set(`room:${targetRoomId}`, session, 600);
 
-    // Notify sender that a receiver joined and requests approval
+    // Notify sender to start negotiating immediately
     const envelope: SignalEnvelope = {
       id: nanoid(),
       roomId: targetRoomId,

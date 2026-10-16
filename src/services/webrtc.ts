@@ -5,6 +5,7 @@ import { APP_CONFIG } from "@/lib/constants";
 
 export interface WebRTCOptions {
   isInitiator: boolean;
+  iceServers?: RTCIceServer[];
   onSignal: (msg: SignalMessage) => void;
   onDataChannelReady: (channel: RTCDataChannel) => void;
   onDataChannelMessage: (event: MessageEvent) => void;
@@ -19,7 +20,12 @@ export class WebRTCEngine {
   private options: WebRTCOptions;
   private iceTimeoutTimer: NodeJS.Timeout | null = null;
   private isConnected = false;
+  private recoveryAttempted = false;
+  private recovering = false;
+  private fallbackOffered = false;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private routeMonitor: ReturnType<typeof setInterval> | null = null;
+  private readingRoute = false;
 
   constructor(options: WebRTCOptions) {
     this.options = options;
@@ -31,8 +37,8 @@ export class WebRTCEngine {
     // Include both STUN and TURN for maximum connectivity:
     // STUN for direct P2P, TURN relay for symmetric NAT / corporate networks
     this.pc = new RTCPeerConnection({
-      iceServers: [...STUN_SERVERS, ...TURN_SERVERS],
-      iceTransportPolicy: "all", // allow STUN first, fall back to TURN
+      iceServers: this.options.iceServers ?? [...STUN_SERVERS, ...TURN_SERVERS],
+      iceTransportPolicy: "all", // allow local, server-reflexive and relay candidates
       iceCandidatePoolSize: 10,  // pre-gather candidates to speed up connection
       bundlePolicy: "max-bundle",
       rtcpMuxPolicy: "require",
@@ -52,6 +58,13 @@ export class WebRTCEngine {
       }
     };
 
+    this.pc.onicecandidateerror = (event) => {
+      // No credentials are logged. Errors from one server do not fail other routes.
+      console.warn("[WebRTC] ICE server unavailable", {
+        url: event.url, code: event.errorCode, reason: event.errorText,
+      });
+    };
+
     this.pc.onicegatheringstatechange = () => {
       console.log("[WebRTC] ICE gathering state:", this.pc?.iceGatheringState);
     };
@@ -65,22 +78,17 @@ export class WebRTCEngine {
         // Start timeout when ICE checking begins — use constant value
         this.startIceTimer(APP_CONFIG.iceTimeoutMs);
       } else if (state === "connected" || state === "completed") {
-        this.clearIceTimer();
-        this.isConnected = true;
+        // An ICE route alone is not yet a usable file channel.
+        if (this.dc?.readyState === "open") {
+          this.clearIceTimer();
+          this.isConnected = true;
+        }
         this.detectConnectionMode();
       } else if (state === "failed") {
-        console.warn("[WebRTC] ICE connection failed — attempting ICE restart");
-        this.clearIceTimer();
-        // Try ICE restart before giving up
-        if (this.options.isInitiator && this.pc) {
-          this.pc.restartIce();
-          this.startIceTimer(10000); // 10s extra for restart
-        } else {
-          this.options.onConnectionTimeout();
-        }
+        this.isConnected = false;
+        void this.recoverConnection();
       } else if (state === "disconnected") {
-        // Transient disconnects can self-heal; give 8s grace period
-        console.warn("[WebRTC] ICE disconnected — waiting for reconnect...");
+        this.isConnected = false;
         this.startIceTimer(8000);
       } else if (state === "closed") {
         this.options.onDisconnected();
@@ -91,12 +99,12 @@ export class WebRTCEngine {
       if (!this.pc) return;
       const state = this.pc.connectionState;
       console.log("[WebRTC] Peer connection state:", state);
-      if (state === "connected") {
+      if (state === "connected" && this.dc?.readyState === "open") {
         this.clearIceTimer();
         this.isConnected = true;
       } else if (state === "failed") {
-        this.clearIceTimer();
-        this.options.onConnectionTimeout();
+        this.isConnected = false;
+        void this.recoverConnection();
       }
     };
 
@@ -116,13 +124,16 @@ export class WebRTCEngine {
         this.setupDataChannel(this.dc);
       };
     }
+    // Cover missing offers/answers as well as ICE and data-channel negotiation.
+    this.startIceTimer(APP_CONFIG.iceTimeoutMs + (this.options.isInitiator ? 0 : 5000));
   }
 
-  public async startNegotiation() {
+  public async startNegotiation(iceRestart = false) {
     if (!this.pc || !this.options.isInitiator) return;
     try {
       console.log("[WebRTC] Creating SDP offer");
-      const offer = await this.pc.createOffer();
+      const offer = await this.pc.createOffer({ iceRestart });
+      this.startIceTimer(APP_CONFIG.iceTimeoutMs);
       await this.pc.setLocalDescription(offer);
       this.options.onSignal({
         type: "signal:offer",
@@ -135,13 +146,15 @@ export class WebRTCEngine {
 
   public async handleOffer(sdp: RTCSessionDescriptionInit) {
     if (!this.pc) return;
-    // Ignore stale offers if already in a stable state with a remote description
-    if (this.pc.signalingState === "stable" && this.pc.remoteDescription) {
+    // Suppress retransmitted offers, but accept new SDP for ICE restarts.
+    if (this.pc.remoteDescription?.sdp === sdp.sdp) {
       console.warn("[WebRTC] Ignoring duplicate offer (already stable)");
       return;
     }
     try {
       console.log("[WebRTC] Handling remote offer");
+      this.fallbackOffered = false;
+      this.startIceTimer(APP_CONFIG.iceTimeoutMs + 5000);
       await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
       await this.drainPendingCandidates();
 
@@ -187,7 +200,9 @@ export class WebRTCEngine {
     }
 
     // Queue candidate if remote description is not set yet
-    if (!this.pc.remoteDescription || !this.pc.remoteDescription.type) {
+    if (!this.pc.remoteDescription || !this.pc.remoteDescription.type ||
+        (candidateInit.usernameFragment &&
+          !this.pc.remoteDescription.sdp.includes(`a=ice-ufrag:${candidateInit.usernameFragment}`))) {
       console.log("[WebRTC] Queueing candidate until remoteDescription is set");
       this.pendingCandidates.push(candidateInit);
       return;
@@ -219,12 +234,19 @@ export class WebRTCEngine {
     return this.dc;
   }
 
+  public getMaxMessageSize(): number {
+    return this.pc?.sctp?.maxMessageSize ?? 64 * 1024;
+  }
+
   public getStats(): Promise<RTCStatsReport> | null {
     return this.pc ? this.pc.getStats() : null;
   }
 
   public close() {
     this.clearIceTimer();
+    if (this.routeMonitor) clearInterval(this.routeMonitor);
+    this.routeMonitor = null;
+    this.isConnected = false;
     this.pendingCandidates = [];
     if (this.dc) {
       try { this.dc.close(); } catch {}
@@ -252,6 +274,11 @@ export class WebRTCEngine {
         const sctp = (this.pc as RTCPeerConnection & { sctp?: { maxMessageSize: number } }).sctp;
         if (sctp) console.log("[WebRTC] SCTP maxMessageSize:", sctp.maxMessageSize);
       } catch {}
+      void this.detectConnectionMode();
+      // Stats can settle after channel opening; also track route switches.
+      if (!this.routeMonitor) {
+        this.routeMonitor = setInterval(() => void this.detectConnectionMode(), 2000);
+      }
       this.options.onDataChannelReady(channel);
     };
 
@@ -273,12 +300,42 @@ export class WebRTCEngine {
 
   private startIceTimer(timeoutMs: number) {
     this.clearIceTimer();
+    if (!this.pc) return;
     this.iceTimeoutTimer = setTimeout(() => {
+      this.iceTimeoutTimer = null;
       if (!this.isConnected) {
-        console.warn(`[WebRTC] ICE timeout after ${timeoutMs / 1000}s — triggering fallback`);
-        this.options.onConnectionTimeout();
+        console.warn(`[WebRTC] ICE timeout after ${timeoutMs / 1000}s — checking recovery`);
+        void this.recoverConnection();
       }
     }, timeoutMs);
+  }
+
+  private async recoverConnection() {
+    if (!this.pc || this.pc.signalingState === "closed" || this.fallbackOffered || this.recovering) return;
+    // ICE and peer-connection failure events can describe the same failure.
+    // Give the active restart its full deadline before falling back.
+    if (this.recoveryAttempted && this.iceTimeoutTimer) return;
+    this.clearIceTimer();
+    if (!this.recoveryAttempted) {
+      this.recoveryAttempted = true;
+      this.recovering = true;
+      this.isConnected = false;
+      // Only the sender offers; the receiver waits for the restart offer.
+      if (this.options.isInitiator && this.pc.signalingState === "stable") {
+        await this.startNegotiation(true);
+      }
+      this.startIceTimer(APP_CONFIG.iceTimeoutMs + (this.options.isInitiator ? 0 : 5000));
+      this.recovering = false;
+      return;
+    }
+    this.fallbackOffered = true;
+    console.warn("[WebRTC] Connection and recovery failed", {
+      iceState: this.pc.iceConnectionState,
+      signalingState: this.pc.signalingState,
+      hasRelay: (this.options.iceServers ?? TURN_SERVERS).some(server =>
+        [server.urls].flat().some(url => /^turns?:/.test(url))),
+    });
+    this.options.onConnectionTimeout();
   }
 
   private clearIceTimer() {
@@ -289,30 +346,56 @@ export class WebRTCEngine {
   }
 
   private async detectConnectionMode() {
-    if (!this.pc) return;
+    const pc = this.pc;
+    if (!pc || this.readingRoute) return;
+    this.readingRoute = true;
     try {
-      const stats = await this.pc.getStats();
-      let mode: ConnectionMode = "INTERNET_P2P";
-
+      const stats = await pc.getStats();
+      if (this.pc !== pc) return;
+      // A successful connectivity check does not mean the pair carries traffic.
+      // Follow the transport's selectedCandidatePairId instead.
+      let selected: RTCIceCandidatePairStats | undefined;
       stats.forEach((report) => {
-        if (report.type === "candidate-pair" && report.state === "succeeded") {
-          const local = stats.get(report.localCandidateId);
-          const remote = stats.get(report.remoteCandidateId);
-
-          if (local?.candidateType === "host" && remote?.candidateType === "host") {
-            mode = "LOCAL_P2P";
-          } else if (local?.candidateType === "relay" || remote?.candidateType === "relay") {
-            mode = "TURN_RELAY";
-          } else {
-            mode = "INTERNET_P2P";
-          }
+        if (report.type === "transport" && report.selectedCandidatePairId) {
+          selected = stats.get(report.selectedCandidatePairId);
         }
       });
+      if (!selected) {
+        // Older browsers may expose only the nonstandard selected flag or a
+        // single nominated pair. Never guess between multiple successful pairs.
+        const nominated: RTCIceCandidatePairStats[] = [];
+        stats.forEach((report) => {
+          if (report.type !== "candidate-pair" || report.state !== "succeeded") return;
+          if (report.selected === true) selected = report;
+          if (report.nominated) nominated.push(report);
+        });
+        if (!selected && nominated.length === 1) selected = nominated[0];
+      }
+      if (!selected) return;
+      const local = stats.get(selected.localCandidateId);
+      const remote = stats.get(selected.remoteCandidateId);
+      if (!local?.candidateType || !remote?.candidateType) return;
+      const mode: ConnectionMode = local.candidateType === "relay" || remote.candidateType === "relay"
+        ? "TURN_RELAY"
+        : local.candidateType === "host" && remote.candidateType === "host"
+          ? "LOCAL_P2P"
+          : "INTERNET_P2P";
 
-      console.log("[WebRTC] Detected connection mode:", mode);
+      // Log candidate types and latency, without IP addresses or credentials.
+      console.debug("[WebRTC] Selected file route", {
+        mode,
+        localType: local.candidateType,
+        remoteType: remote.candidateType,
+        protocol: local.protocol,
+        relayProtocol: local.relayProtocol,
+        roundTripTimeMs: selected.currentRoundTripTime === undefined
+          ? undefined : Math.round(selected.currentRoundTripTime * 1000),
+      });
       this.options.onConnectionModeChange(mode);
     } catch {
-      this.options.onConnectionModeChange("INTERNET_P2P");
+      // Preserve the last known route if statistics are temporarily unavailable.
+    } finally {
+      this.readingRoute = false;
     }
   }
 }

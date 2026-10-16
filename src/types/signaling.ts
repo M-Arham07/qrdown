@@ -13,7 +13,7 @@ export type SignalMessage =
   | { type: "transfer:accepted"; accepted: boolean }
   | { type: "transfer:completed"; fileId: string; checksumVerified: boolean }
   | { type: "transfer:cancel"; reason?: string }
-  | { type: "cloud:offer"; files: FileMetadata[]; downloadUrl: string; encryptionKeyJwk?: JsonWebKey; ivHex?: string }
+  | { type: "cloud:offer"; objectKey: string; files: FileMetadata[]; downloadUrl: string; encryptionKeyJwk?: JsonWebKey; ivHex?: string }
   | { type: "peer:disconnect"; role: PeerRole };
 
 export interface SignalEnvelope {

@@ -11,7 +11,7 @@ interface PairingQRCodeProps {
   expiresAt: number;
 }
 
-export function PairingQRCode({ roomId, code, expiresAt }: PairingQRCodeProps) {
+export function PairingQRCode({ code, expiresAt }: PairingQRCodeProps) {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [timeLeft, setTimeLeft] = useState("");
@@ -39,35 +39,35 @@ export function PairingQRCode({ roomId, code, expiresAt }: PairingQRCodeProps) {
     if (type === "code") {
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
-      toast.success("6-digit code copied to clipboard!");
+      toast.success("Code copied");
     } else {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
-      toast.success("Pairing link copied to clipboard!");
+      toast.success("Link copied");
     }
   };
 
   return (
     <div className="w-full flex flex-col items-center gap-6">
       <div className="text-center">
-        <h2 className="text-xl font-bold text-[#2C1A11] tracking-tight">Scan or Enter Code</h2>
-        <p className="text-xs text-[#6B5244] mt-1 max-w-sm">
+        <h2 className="text-xl font-bold text-[#18181B] tracking-tight">Connect your other device</h2>
+        <p className="text-xs text-[#52525B] mt-1 max-w-sm">
           Open WebSend on your other device and scan the QR code or enter the 6-digit room code.
         </p>
       </div>
 
       {/* QR Code Container */}
-      <div className="p-4 sm:p-5 bg-white rounded-2xl border-2 border-[#EDE2D3] shadow-md flex flex-col items-center gap-3">
-        <div className="bg-white p-2 rounded-xl">
+      <div className="p-4 sm:p-5 bg-white rounded-lg border-2 border-[#E4E4E7]  flex flex-col items-center gap-3">
+        <div className="bg-white p-2 rounded-lg">
           <QRCode
             value={shareUrl}
             size={180}
             bgColor="#FFFFFF"
-            fgColor="#2C1A11"
+            fgColor="#18181B"
             level="M"
           />
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-[#9C8373]">
+        <div className="flex items-center gap-1.5 text-[11px] text-[#71717A]">
           <QrIcon className="w-3.5 h-3.5" />
           <span>Point your phone camera here</span>
         </div>
@@ -75,45 +75,46 @@ export function PairingQRCode({ roomId, code, expiresAt }: PairingQRCodeProps) {
 
       {/* 6-Digit Room Code Card */}
       <div className="w-full max-w-sm flex flex-col gap-2">
-        <div className="text-xs font-semibold text-[#6B5244] text-center uppercase tracking-wider">
-          Or Enter 6-Digit Code
+        <div className="text-xs font-semibold text-[#52525B] text-center uppercase tracking-wider">
+          Connection code
         </div>
-        <div
+        <button
+          type="button"
+          aria-label={`Copy connection code ${code}`}
           onClick={() => copyToClipboard(code, "code")}
-          className="flex items-center justify-between p-3.5 bg-white rounded-xl border border-[#DFD0BE] shadow-sm hover:border-[#C45F2C] transition-all cursor-pointer group"
+          className="flex items-center justify-between p-3.5 bg-white rounded-lg border border-[#D4D4D8]  hover:border-[#1D4ED8] transition-colors cursor-pointer group"
         >
           <div className="flex items-center gap-2">
-            <span className="room-code-badge text-2xl font-bold text-[#C45F2C] pl-2">{code}</span>
+            <span className="room-code-badge text-2xl font-bold text-[#1D4ED8] pl-2">{code}</span>
           </div>
-          <button
-            type="button"
-            className="flex items-center gap-1 text-xs font-medium text-[#6B5244] group-hover:text-[#C45F2C] transition-colors px-2 py-1 rounded-md bg-[#F8F3EA]"
+          <span
+            className="flex items-center gap-1 text-xs font-medium text-[#52525B] group-hover:text-[#1D4ED8] transition-colors px-2 py-1 rounded-md bg-[#F4F4F5]"
           >
             {copiedCode ? <Check className="w-3.5 h-3.5 text-[#2E7D4F]" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copiedCode ? "Copied" : "Copy"}</span>
-          </button>
-        </div>
+          </span>
+        </button>
 
         {/* Shareable Link Button */}
         <button
           onClick={() => copyToClipboard(shareUrl, "link")}
-          className="w-full py-2.5 px-3 rounded-xl border border-[#EDE2D3] bg-[#FAF6EF] hover:bg-[#F3ECE0] text-xs font-medium text-[#6B5244] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          className="w-full py-2.5 px-3 rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] hover:bg-[#F3ECE0] text-xs font-medium text-[#52525B] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
         >
           {copiedLink ? <Check className="w-3.5 h-3.5 text-[#2E7D4F]" /> : <Link2 className="w-3.5 h-3.5" />}
-          <span>{copiedLink ? "Link copied!" : "Copy direct pairing link"}</span>
+          <span>{copiedLink ? "Link copied!" : "Copy link"}</span>
         </button>
       </div>
 
       {/* Expiry / Waiting indicator */}
-      <div className="flex items-center gap-4 text-xs text-[#9C8373]">
+      <div className="flex items-center gap-4 text-xs text-[#71717A]">
         <div className="flex items-center gap-1.5">
           <Clock className="w-3.5 h-3.5" />
           <span>Expires in {timeLeft}</span>
         </div>
         <span>•</span>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-[#C45F2C] animate-pulse" />
-          <span className="text-[#6B5244]">Waiting for connection...</span>
+          <div className="w-2 h-2 rounded-full bg-[#1D4ED8]" />
+          <span className="text-[#52525B]">Waiting for device</span>
         </div>
       </div>
     </div>

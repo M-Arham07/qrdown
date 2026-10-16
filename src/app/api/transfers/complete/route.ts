@@ -19,6 +19,10 @@ export async function POST(req: Request) {
 
     // Immediate cleanup of cloud storage per PRD requirement
     if (objectKey) {
+      const upload = await sessionStore.get<{ objectKey: string }>(`upload:${roomId}`);
+      if (!upload || upload.objectKey !== objectKey || !checksumVerified) {
+        return NextResponse.json({ error: "Invalid upload completion" }, { status: 400 });
+      }
       await r2Service.deleteObject(objectKey);
       await sessionStore.del(`upload:${roomId}`);
     }

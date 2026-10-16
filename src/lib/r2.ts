@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { mockStorage } from "./mockStorage";
 import { APP_CONFIG } from "./constants";
 
 const isR2Configured = Boolean(
@@ -53,7 +54,7 @@ export const r2Service = {
 
   async createDownloadUrl(key: string) {
     if (!s3Client || !process.env.R2_BUCKET_NAME) {
-      return `/api/uploads/mock-download?key=${encodeURIComponent(key)}`;
+      return `/api/uploads/mock-upload?key=${encodeURIComponent(key)}`;
     }
     const command = new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME,
@@ -63,15 +64,14 @@ export const r2Service = {
   },
 
   async deleteObject(key: string) {
-    if (!s3Client || !process.env.R2_BUCKET_NAME) return;
-    try {
-      const command = new DeleteObjectCommand({
-        Bucket: process.env.R2_BUCKET_NAME,
-        Key: key,
-      });
-      await s3Client.send(command);
-    } catch {
-      // Silently catch deletion errors on expired items
+    if (!s3Client || !process.env.R2_BUCKET_NAME) {
+      mockStorage.delete(key);
+      return;
     }
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+    });
+    await s3Client.send(command);
   },
 };

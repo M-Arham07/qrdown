@@ -7,6 +7,7 @@ export interface CloudUploadOptions {
   roomId: string;
   secret: string;
   onProgress: (progress: TransferProgress) => void;
+  signal?: AbortSignal;
 }
 
 export interface CloudDownloadOptions {
@@ -18,6 +19,7 @@ export interface CloudDownloadOptions {
   secret: string;
   objectKey: string;
   onProgress: (progress: TransferProgress) => void;
+  signal?: AbortSignal;
 }
 
 export const cloudFallbackService = {
@@ -29,6 +31,7 @@ export const cloudFallbackService = {
     roomId,
     secret,
     onProgress,
+    signal,
   }: CloudUploadOptions): Promise<{
     downloadUrl: string;
     encryptionKeyJwk: JsonWebKey;
@@ -36,7 +39,9 @@ export const cloudFallbackService = {
     metadata: FileMetadata;
     objectKey: string;
   }> {
+    signal?.throwIfAborted();
     const rawBuffer = await file.arrayBuffer();
+    signal?.throwIfAborted();
     const checksum = await cryptoService.computeChecksum(rawBuffer);
 
     // Generate AES-256-GCM key & IV
@@ -47,10 +52,12 @@ export const cloudFallbackService = {
     // Encrypt client-side
     const encryptedBuffer = await cryptoService.encrypt(rawBuffer, key, iv);
     const keyJwk = await cryptoService.exportKey(key);
+    signal?.throwIfAborted();
 
     // Get presigned upload URL
     const authRes = await fetch("/api/uploads/authorize", {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         roomId,
@@ -70,7 +77,15 @@ export const cloudFallbackService = {
 
     // Upload encrypted payload directly to storage
     await new Promise<void>((resolve, reject) => {
+      signal?.throwIfAborted();
       const xhr = new XMLHttpRequest();
+      const abort = () => xhr.abort();
+      const finish = (error?: Error) => {
+        signal?.removeEventListener("abort", abort);
+        if (error) reject(error); else resolve();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      xhr.onabort = () => finish(new DOMException("Transfer cancelled", "AbortError"));
       xhr.open("PUT", uploadUrl, true);
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
@@ -91,13 +106,13 @@ export const cloudFallbackService = {
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve();
+          finish();
         } else {
-          reject(new Error(`Cloud upload failed with status ${xhr.status}`));
+          finish(new Error(`Cloud upload failed with status ${xhr.status}`));
         }
       };
 
-      xhr.onerror = () => reject(new Error("Network error during cloud upload"));
+      xhr.onerror = () => finish(new Error("Network error during cloud upload"));
       xhr.send(encryptedBuffer);
     });
 
@@ -105,9 +120,12 @@ export const cloudFallbackService = {
     const dlRes = await fetch(
       `/api/uploads/download?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(
         secret
-      )}&objectKey=${encodeURIComponent(objectKey)}`
+      )}&objectKey=${encodeURIComponent(objectKey)}`,
+      { signal }
     );
+    if (!dlRes.ok) throw new Error("Could not create download link");
     const { downloadUrl } = await dlRes.json();
+    signal?.throwIfAborted();
 
     const metadata: FileMetadata = {
       id: crypto.randomUUID(),
@@ -138,8 +156,10 @@ export const cloudFallbackService = {
     secret,
     objectKey,
     onProgress,
+    signal,
   }: CloudDownloadOptions): Promise<Blob> {
-    const response = await fetch(downloadUrl);
+    signal?.throwIfAborted();
+    const response = await fetch(downloadUrl, { signal });
     if (!response.ok) {
       throw new Error("Failed to download encrypted file from cloud");
     }
@@ -163,14 +183,16 @@ export const cloudFallbackService = {
 
     // Verify SHA-256 integrity
     const computedHash = await cryptoService.computeChecksum(decryptedBuffer);
+    signal?.throwIfAborted();
     if (metadata.checksum && computedHash !== metadata.checksum) {
       throw new Error("Checksum mismatch: File was corrupted in transit");
     }
 
     // Trigger immediate deletion of cloud object per PRD
     try {
-      await fetch("/api/transfers/complete", {
+      const completion = await fetch("/api/transfers/complete", {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roomId,
@@ -179,10 +201,12 @@ export const cloudFallbackService = {
           checksumVerified: true,
         }),
       });
+      if (!completion.ok) throw new Error(`Cleanup failed (${completion.status})`);
     } catch (e) {
       console.warn("Failed to notify immediate cloud deletion:", e);
     }
 
+    signal?.throwIfAborted();
     const blob = new Blob([decryptedBuffer], { type: metadata.type });
     fileTransferService.downloadBlob(blob, metadata.name);
     return blob;

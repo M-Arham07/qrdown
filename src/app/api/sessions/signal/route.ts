@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sessionStore } from "@/lib/redis";
 import { RoomSession } from "@/types/session";
 import { SignalEnvelope, SignalMessage } from "@/types/signaling";
+import { APP_CONFIG } from "@/lib/constants";
 import { nanoid } from "nanoid";
 
 export async function POST(req: Request) {
@@ -21,6 +22,10 @@ export async function POST(req: Request) {
     const session = await sessionStore.get<RoomSession>(`room:${roomId}`);
     if (!session || session.secret !== secret) {
       return NextResponse.json({ error: "Unauthorized session credentials" }, { status: 403 });
+    }
+
+    if (await sessionStore.get(`cancelled:${roomId}`)) {
+      return NextResponse.json({ error: "Session cancelled" }, { status: 410 });
     }
 
     // If message is approval update, update room session state
@@ -62,6 +67,17 @@ export async function GET(req: Request) {
     const session = await sessionStore.get<RoomSession>(`room:${roomId}`);
     if (!session || session.secret !== secret) {
       return NextResponse.json({ error: "Unauthorized session" }, { status: 403 });
+    }
+
+    if (await sessionStore.get(`cancelled:${roomId}`)) {
+      return NextResponse.json({ signals: [], session: { ...session, status: "closed" } },
+        { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // Keep active transfers cancellable even when they exceed the pairing TTL.
+    if (session.expiresAt - Date.now() < APP_CONFIG.roomTtlSeconds * 500) {
+      session.expiresAt = Date.now() + APP_CONFIG.roomTtlSeconds * 1000;
+      await sessionStore.set(`room:${roomId}`, session, APP_CONFIG.roomTtlSeconds);
     }
 
     const allSignals = (await sessionStore.popSignals(roomId, since)) as SignalEnvelope[];

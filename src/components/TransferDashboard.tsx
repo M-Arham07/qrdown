@@ -2,7 +2,7 @@
 
 import { TransferProgress, ConnectionMode } from "@/types/transfer";
 import { DeviceInfo } from "@/types/session";
-import { Wifi, Globe, Cloud, XCircle } from "lucide-react";
+import { XCircle } from "lucide-react";
 
 interface TransferDashboardProps {
   progress: TransferProgress | null;
@@ -32,38 +32,12 @@ export function TransferDashboard({
     return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
   };
 
-  const modeBadge = () => {
-    switch (connectionMode) {
-      case "LOCAL_P2P":
-        return (
-          <span className="flex items-center gap-1 text-[11px] font-semibold text-[#2E7D4F] bg-[#EAF6EE] px-2.5 py-0.5 rounded-full border border-[#D0ECD9]">
-            <Wifi className="w-3 h-3" />
-            <span>Direct Local Wi-Fi (P2P)</span>
-          </span>
-        );
-      case "INTERNET_P2P":
-        return (
-          <span className="flex items-center gap-1 text-[11px] font-semibold text-[#C45F2C] bg-[#FBECE3] px-2.5 py-0.5 rounded-full border border-[#F3D5C3]">
-            <Globe className="w-3 h-3" />
-            <span>Direct Internet (P2P)</span>
-          </span>
-        );
-      case "CLOUD":
-        return (
-          <span className="flex items-center gap-1 text-[11px] font-semibold text-[#2B72A8] bg-[#EAF2FA] px-2.5 py-0.5 rounded-full border border-[#CDE1F4]">
-            <Cloud className="w-3 h-3" />
-            <span>Encrypted Cloud Transfer</span>
-          </span>
-        );
-      default:
-        return (
-          <span className="flex items-center gap-1 text-[11px] font-semibold text-[#6B5244] bg-[#F8F3EA] px-2.5 py-0.5 rounded-full">
-            <Globe className="w-3 h-3" />
-            <span>P2P Relay</span>
-          </span>
-        );
-    }
-  };
+  const modeLabel = {
+    LOCAL_P2P: "Direct connection",
+    INTERNET_P2P: "Direct connection",
+    TURN_RELAY: "Relay connection",
+    CLOUD: "Cloud transfer",
+  }[connectionMode];
 
   const percentage = progress?.percentage || 0;
   const fileName = progress?.fileName || currentFileName || "Transferring file...";
@@ -75,35 +49,35 @@ export function TransferDashboard({
   return (
     <div className="w-full flex flex-col gap-6">
       {/* Header status bar */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">{modeBadge()}</div>
-        <div className="text-xs text-[#9C8373] font-medium">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-[#52525B]">{modeLabel}</span>
+        <div className="text-xs text-[#71717A] font-medium">
           Connected to {peerDevice?.name || "Peer"}
         </div>
       </div>
 
       {/* Progress card */}
-      <div className="bg-[#FAF6EF] p-5 sm:p-6 rounded-2xl border border-[#EDE2D3] flex flex-col gap-4">
+      <div className="bg-[#FAFAFA] p-5 sm:p-6 rounded-lg border border-[#E4E4E7] flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="font-bold text-base text-[#2C1A11] truncate">{fileName}</h3>
-            <p className="text-xs text-[#6B5244] mt-0.5">
+            <h3 className="font-bold text-base text-[#18181B] truncate">{fileName}</h3>
+            <p className="text-xs text-[#52525B] mt-0.5">
               {transferred} of {total}
             </p>
           </div>
-          <span className="text-2xl font-extrabold text-[#C45F2C] shrink-0">{percentage}%</span>
+          <span className="text-2xl font-extrabold text-[#1D4ED8] shrink-0">{percentage}%</span>
         </div>
 
         {/* Progress bar */}
-        <div className="w-full h-3 rounded-full bg-[#EFE6D8] overflow-hidden">
+        <div role="progressbar" aria-label="File transfer" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage} className="w-full h-2 rounded-full bg-[#E4E4E7] overflow-hidden">
           <div
-            className="h-full bg-[#C45F2C] rounded-full progress-fill"
+            className="h-full bg-[#1D4ED8] rounded-full progress-fill"
             style={{ width: `${percentage}%` }}
           />
         </div>
 
         {/* Metrics line */}
-        <div className="flex items-center justify-between text-xs text-[#6B5244] font-medium pt-1">
+        <div className="flex items-center justify-between text-xs text-[#52525B] font-medium pt-1">
           <span>{speed}</span>
           {eta && <span>{eta}</span>}
         </div>
@@ -112,7 +86,7 @@ export function TransferDashboard({
       {/* Cancel button */}
       <button
         onClick={onCancel}
-        className="w-full py-2.5 px-4 rounded-xl border border-[#DFD0BE] bg-white hover:bg-[#FDEEEB] hover:text-[#C23E2A] hover:border-[#C23E2A] text-xs font-semibold text-[#6B5244] transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+        className="w-full py-2.5 px-4 rounded-lg border border-[#D4D4D8] bg-white hover:bg-[#FDEEEB] hover:text-[#C23E2A] hover:border-[#C23E2A] text-xs font-semibold text-[#52525B] transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
       >
         <XCircle className="w-4 h-4" />
         <span>Cancel Transfer</span>

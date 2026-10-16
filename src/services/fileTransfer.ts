@@ -7,6 +7,7 @@ export interface SendFileOptions {
   dataChannel: RTCDataChannel;
   onProgress: (progress: TransferProgress) => void;
   isCancelled: () => boolean;
+  maxMessageSize?: number;
 }
 
 export interface ReceiveFileTracker {
@@ -16,12 +17,7 @@ export interface ReceiveFileTracker {
   lastProgressUpdate: number;
 }
 
-/**
- * Prepares lightweight file metadata WITHOUT reading the full file.
- * Checksum is computed lazily — we skip the blocking SHA-256 pass here
- * and let the receiver verify after assembly. This prevents UI freezes
- * for large files (e.g., 1 GB video).
- */
+/** Build metadata without reading the file; WebRTC provides transport integrity. */
 export async function prepareFileMetadataFast(file: File): Promise<FileMetadata> {
   const totalChunks = Math.ceil(file.size / APP_CONFIG.chunkSizeBytes);
   return {
@@ -30,12 +26,13 @@ export async function prepareFileMetadataFast(file: File): Promise<FileMetadata>
     size: file.size,
     type: file.type || "application/octet-stream",
     lastModified: file.lastModified,
-    checksum: undefined, // computed after transfer on receiver side
+    checksum: undefined,
     totalChunks,
   };
 }
 
 export const fileTransferService = {
+  prepareFileMetadataFast,
   /**
    * Prepares file metadata and calculates SHA-256 before transfer.
    * Note: This reads the entire file into memory — prefer prepareFileMetadataFast
@@ -64,10 +61,6 @@ export const fileTransferService = {
   /**
    * Sends file through RTCDataChannel with backpressure flow control.
    *
-   * Uses 64 KiB chunks (APP_CONFIG.chunkSizeBytes) and a 4 MiB buffered-amount
-   * threshold (APP_CONFIG.bufferThresholdBytes). This gives ~4–8x better
-   * throughput compared to the previous 16 KiB / 256 KiB config.
-   *
    * Chunk wire format:
    *   [4 bytes: uint32 chunkIndex BE] [N bytes: raw file data]
    */
@@ -76,8 +69,12 @@ export const fileTransferService = {
     dataChannel,
     onProgress,
     isCancelled,
+    maxMessageSize = 64 * 1024,
   }: SendFileOptions): Promise<void> {
-    const chunkSize = APP_CONFIG.chunkSizeBytes;
+    // Include the four byte header in the negotiated SCTP message limit.
+    const messageLimit = maxMessageSize > 0 ? maxMessageSize : 64 * 1024;
+    const chunkSize = Math.min(APP_CONFIG.chunkSizeBytes, messageLimit - 4);
+    if (chunkSize <= 0) throw new Error("Negotiated message size is too small");
     const bufferThreshold = APP_CONFIG.bufferThresholdBytes;
     const totalBytes = file.size;
     const totalChunks = Math.ceil(totalBytes / chunkSize);
@@ -86,14 +83,15 @@ export const fileTransferService = {
     const startTime = Date.now();
     let lastReportTime = startTime;
     let lastReportedBytes = 0;
+    let readBuffer = new Uint8Array(0);
+    let readOffset = 0;
 
     // Set threshold on channel (may already be set, but re-affirm)
     dataChannel.bufferedAmountLowThreshold = bufferThreshold;
 
     while (offset < totalBytes) {
-      if (isCancelled()) {
-        throw new Error("Transfer cancelled by user");
-      }
+      if (isCancelled()) throw new Error("Transfer cancelled by user");
+      if (dataChannel.readyState !== "open") throw new Error("Connection closed during transfer");
 
       // Backpressure: wait if the send buffer is saturated
       if (dataChannel.bufferedAmount > bufferThreshold) {
@@ -105,15 +103,20 @@ export const fileTransferService = {
         throw new Error("Transfer cancelled by user");
       }
 
-      const end = Math.min(offset + chunkSize, totalBytes);
-      const slice = file.slice(offset, end);
-      const chunkBuffer = await slice.arrayBuffer();
+      if (readOffset >= readBuffer.byteLength) {
+        readBuffer = new Uint8Array(await file.slice(offset, offset + chunkSize * 16).arrayBuffer());
+        readOffset = 0;
+      }
+      if (isCancelled()) throw new Error("Transfer cancelled by user");
+      if (dataChannel.readyState !== "open") throw new Error("Connection closed during transfer");
+      const chunkBuffer = readBuffer.subarray(readOffset, readOffset + chunkSize);
       const actualChunkBytes = chunkBuffer.byteLength;
+      readOffset += actualChunkBytes;
 
       // Wire frame: 4-byte chunk index prefix
       const payload = new Uint8Array(4 + actualChunkBytes);
       new DataView(payload.buffer).setUint32(0, chunkIndex, false); // big-endian
-      payload.set(new Uint8Array(chunkBuffer), 4);
+      payload.set(chunkBuffer, 4);
 
       dataChannel.send(payload.buffer);
 
@@ -168,30 +171,30 @@ export const fileTransferService = {
  * rather than polling.
  */
 function waitForBufferDrain(channel: RTCDataChannel, threshold: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    // Fast path: already drained
-    if (channel.bufferedAmount <= threshold) {
-      resolve();
-      return;
-    }
-
-    const handler = () => {
-      channel.removeEventListener("bufferedamountlow", handler);
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      channel.removeEventListener("bufferedamountlow", onDrain);
+      channel.removeEventListener("close", onClose);
+      channel.removeEventListener("error", onClose);
+    };
+    const onDrain = () => {
+      if (channel.bufferedAmount > threshold) return;
+      cleanup();
       resolve();
     };
-    channel.addEventListener("bufferedamountlow", handler);
-
-    // Safety timeout: if event never fires (e.g., channel closed), resolve anyway
-    const safety = setTimeout(() => {
-      channel.removeEventListener("bufferedamountlow", handler);
-      resolve();
-    }, 5000);
-
-    // Clear safety timer if event fires first
-    channel.addEventListener(
-      "bufferedamountlow",
-      () => clearTimeout(safety),
-      { once: true }
-    );
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Connection closed while sending"));
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Transfer stalled. Reconnect the devices and try again."));
+    }, 30000);
+    channel.addEventListener("bufferedamountlow", onDrain);
+    channel.addEventListener("close", onClose);
+    channel.addEventListener("error", onClose);
+    if (channel.readyState !== "open") onClose();
+    else onDrain();
   });
 }

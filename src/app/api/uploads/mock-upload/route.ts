@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 
-// In-memory buffer for simulated local cloud storage
-const localFileStorage = new Map<string, { buffer: ArrayBuffer; contentType: string }>();
+import { mockStorage as localFileStorage } from "@/lib/mockStorage";
 
 export async function PUT(req: Request) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json({ error: "Local storage is only available in development" }, { status: 404 });
+    }
     const { searchParams } = new URL(req.url);
     const key = searchParams.get("key") || "default";
     const contentType = req.headers.get("content-type") || "application/octet-stream";
@@ -20,6 +22,9 @@ export async function PUT(req: Request) {
 
 export async function GET(req: Request) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json({ error: "Local storage is only available in development" }, { status: 404 });
+    }
     const { searchParams } = new URL(req.url);
     const key = searchParams.get("key") || "default";
     const item = localFileStorage.get(key);
