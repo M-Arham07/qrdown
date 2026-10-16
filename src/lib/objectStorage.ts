@@ -56,7 +56,16 @@ export const objectStorageService = {
       mockStorage.set(key, { buffer: arrayBuf as ArrayBuffer, contentType });
       return;
     }
-    await s3Client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+    const uploadUrl = await this.createUploadUrl(key, contentType);
+    const res = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: body as unknown as BodyInit,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Failed to upload to storage: ${res.status} ${errText}`);
+    }
   },
 
   async deleteObject(key: string) {
