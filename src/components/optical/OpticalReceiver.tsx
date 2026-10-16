@@ -160,15 +160,17 @@ export function OpticalReceiver() {
           urlRef.current = url;
           setInfo(data.info);
           setDownloadUrl(url);
-          setReceivedText(canPreviewText(data.blob) ? data.blob : null);
+          setReceivedText(canPreviewText(data.blob, data.info.name) ? data.blob : null);
           stop();
           setPhase("complete");
-          const anchor = document.createElement("a");
-          anchor.href = url;
-          anchor.download = data.info.name;
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
+          if (!canPreviewText(data.blob, data.info.name)) {
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = data.info.name;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          }
         }
       };
       const video = videoRef.current;
@@ -330,7 +332,7 @@ export function OpticalReceiver() {
       <div className="flex items-end justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-medium text-zinc-950">{info?.name || "Receive a file"}</h2>
-          <p className="mt-1 text-sm text-zinc-600">{phase === "complete" ? "File verified. Your download is ready." : phase === "verifying" ? "Restoring and verifying file…" : "Keep the sender’s code inside the camera view."}</p>
+          <p className="mt-1 text-sm text-zinc-600">{phase === "complete" ? (receivedText ? "Text received. Copy it or save it below." : "File verified. Your download is ready.") : phase === "verifying" ? "Restoring and verifying file…" : "Keep the sender’s code inside the camera view."}</p>
         </div>
         <span className="shrink-0 text-4xl font-semibold tabular-nums tracking-tight text-zinc-950" aria-label={`${percent}% received`}>{percent}%</span>
       </div>
@@ -358,7 +360,7 @@ export function OpticalReceiver() {
       </div>}
       {phase === "complete" && receivedText && <ReceivedText blob={receivedText} name={info?.name || "Received text"} />}
       {phase === "complete" && <div className="flex flex-wrap gap-3">
-        <a href={downloadUrl} download={info?.name} className="btn-primary inline-flex min-h-11 items-center rounded-lg px-5 text-sm font-medium">Save file</a>
+        {!receivedText && <a href={downloadUrl} download={info?.name} className="btn-primary inline-flex min-h-11 items-center rounded-lg px-5 text-sm font-medium">Save file</a>}
         <button onClick={() => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); urlRef.current = ""; setDownloadUrl(""); setReceivedText(null); setInfo(null); setPhase("idle"); setProgress({ bytes: 0, chunks: 0, speed: 0 }); }} className="btn-secondary min-h-11 rounded-lg px-5 text-sm">Receive another</button>
       </div>}
       {(active || phase === "opening") && <button onClick={() => { stop(); setPhase("idle"); setInfo(null); setProgress({ bytes: 0, chunks: 0, speed: 0 }); }} className="btn-secondary min-h-11 w-full rounded-lg px-5 text-sm">Cancel</button>}

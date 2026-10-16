@@ -1,4 +1,5 @@
 import { FileMetadata, TransferProgress } from "@/types/transfer";
+import { canPreviewText } from "./textTransfer";
 import { cryptoService } from "./encryption";
 import { fileTransferService } from "./fileTransfer";
 
@@ -208,7 +209,7 @@ export const cloudFallbackService = {
 
     signal?.throwIfAborted();
     const blob = new Blob([decryptedBuffer], { type: metadata.type });
-    fileTransferService.downloadBlob(blob, metadata.name);
+    if (!canPreviewText(blob, metadata.name)) fileTransferService.downloadBlob(blob, metadata.name);
     return blob;
   },
 };

@@ -591,10 +591,13 @@ function MainContent() {
     }
 
     if (operation.signal.aborted) return;
-    // Trigger download
-    fileTransferService.downloadBlob(fullBlob, targetFile.name);
-    if (canPreviewText(fullBlob)) setReceivedTexts(previous => [...previous.slice(-4), { blob: fullBlob, name: targetFile.name, id: targetFile.id }]);
-    toast.success(`Download ready: ${targetFile.name}`);
+    if (canPreviewText(fullBlob, targetFile.name)) {
+      setReceivedTexts(previous => [...previous, { blob: fullBlob, name: targetFile.name, id: targetFile.id }]);
+      toast.success("Text received");
+    } else {
+      fileTransferService.downloadBlob(fullBlob, targetFile.name);
+      toast.success(`Download ready: ${targetFile.name}`);
+    }
 
     // Reset buffer for next file
     incomingChunksRef.current = [];
@@ -685,9 +688,9 @@ function MainContent() {
         type: "transfer:completed", fileId: msg.files[0].id, checksumVerified: true,
       });
       operation.signal.throwIfAborted();
-      if (canPreviewText(downloaded)) setReceivedTexts(previous => [...previous.slice(-4), { blob: downloaded, name: msg.files[0].name, id: msg.files[0].id }]);
+      if (canPreviewText(downloaded, msg.files[0].name)) setReceivedTexts(previous => [...previous, { blob: downloaded, name: msg.files[0].name, id: msg.files[0].id }]);
       setState("COMPLETED");
-      toast.success("Download ready");
+      toast.success(canPreviewText(downloaded, msg.files[0].name) ? "Text received" : "Download ready");
     } catch (err: unknown) {
       if (operation.signal.aborted) return;
       console.error(err);
