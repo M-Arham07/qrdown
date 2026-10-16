@@ -4,13 +4,15 @@ import Link from "next/link";
 import { useState } from "react";
 import { useSessionStore } from "@/stores/useSessionStore";
 import { updateDeviceName } from "@/services/deviceDetection";
-import { Smartphone, Monitor, Edit2, Check } from "lucide-react";
+import { Smartphone, Monitor, Edit2, Check, Terminal } from "lucide-react";
 import { toast } from "sonner";
+import { ApiGuideModal } from "./ApiGuideModal";
 
 export function Header() {
   const { myDevice, setMyDevice } = useSessionStore();
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState(myDevice.name);
+  const [isApiModalOpen, setIsApiModalOpen] = useState(false);
 
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +63,16 @@ export function Header() {
 
         {/* Right Section: Author reference + Device Name Pill */}
         <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:gap-3">
+          {/* API Info Button */}
+          <button
+            onClick={() => setIsApiModalOpen(true)}
+            className="flex items-center gap-1.5 text-xs text-[#52525B] hover:text-[#09090B] font-medium py-1 px-2.5 rounded-full hover:bg-[#F4F4F5] border border-transparent hover:border-[#E4E4E7] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8]"
+            title="Open CLI & HTTP API Guide"
+          >
+            <Terminal className="w-3.5 h-3.5 text-[#71717A]" />
+            <span className="hidden sm:inline">CLI / API</span>
+          </button>
+
           {/* Made by M-Arham07 Link */}
           <a
             href="https://github.com/M-Arham07"
@@ -116,6 +128,7 @@ export function Header() {
           )}
         </div>
       </div>
+      <ApiGuideModal isOpen={isApiModalOpen} onClose={() => setIsApiModalOpen(false)} />
     </header>
   );
 }

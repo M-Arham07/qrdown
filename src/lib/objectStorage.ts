@@ -50,6 +50,15 @@ export const objectStorageService = {
     return getSignedUrl(s3Client, command, { expiresIn: 300 });
   },
 
+  async putObject(key: string, body: Uint8Array | Buffer, contentType: string = "application/octet-stream") {
+    if (!s3Client || !bucket) {
+      const arrayBuf = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+      mockStorage.set(key, { buffer: arrayBuf as ArrayBuffer, contentType });
+      return;
+    }
+    await s3Client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+  },
+
   async deleteObject(key: string) {
     if (!s3Client || !bucket) {
       mockStorage.delete(key);

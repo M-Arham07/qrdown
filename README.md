@@ -12,6 +12,7 @@
 <p align="center">
   <a href="https://qrdown.vercel.app"><strong>Open Application</strong></a> •
   <a href="#core-transmission-modes">Transmission Modes</a> •
+  <a href="#command-line--http-api">CLI &amp; API</a> •
   <a href="#optical-transfer-protocol-ws2">Protocol Specs</a> •
   <a href="#self-hosting--development">Self-Hosting</a>
 </p>
@@ -24,6 +25,7 @@ QRDown provides two independent, high-performance file transfer methods directly
 
 1. **Air-Gapped Optical Transfer**: Converts files into an animated stream of high-density QR codes rendered on-screen and captured by a receiving device's camera. Operates 100% offline with zero radio signals, local network connection, or Bluetooth required.
 2. **Direct Peer-to-Peer Transfer**: Establishes an end-to-end encrypted WebRTC `RTCDataChannel` for direct network transfers with automatic STUN/TURN traversal and encrypted cloud fallback for restrictive NAT environments.
+3. **Headless CLI & HTTP API**: Exchange files directly from terminals or continuous integration pipelines using standard `curl` commands.
 
 ---
 
@@ -40,6 +42,48 @@ QRDown provides two independent, high-performance file transfer methods directly
 * **Room Coordination**: Ephemeral 6-digit room codes or scannable QR pairing links for immediate connection.
 * **Symmetric NAT Traversal**: Configured for automated TURN relay negotiation via Cloudflare Realtime TURN or coturn.
 * **Encrypted Fallback**: Automatic failover to temporary encrypted storage (Cloudflare R2 / S3) if direct network connectivity cannot be negotiated.
+
+---
+
+## Command Line & HTTP API
+
+QRDown provides a headless endpoint (`/api/cli`) designed for shell scripts, terminals, and automation pipelines without dependencies beyond `curl`:
+
+### 1. Upload a File
+```bash
+curl -F "file=@document.pdf" https://qrdown.vercel.app/api/cli
+```
+
+### 2. Stream Data or Text from STDIN
+```bash
+echo "Server auth token" | curl -F "file=@-" https://qrdown.vercel.app/api/cli
+cat archive.tar.gz | curl -F "file=@-" https://qrdown.vercel.app/api/cli
+```
+
+### 3. Download a File
+```bash
+# Save preserving remote filename:
+curl -sLOJ https://qrdown.vercel.app/api/cli/<TRANSFER_ID>
+
+# Or specify custom destination:
+curl -sL https://qrdown.vercel.app/api/cli/<TRANSFER_ID> -o output.bin
+```
+
+### 4. Query Transfer Metadata (JSON)
+```bash
+curl -sH "Accept: application/json" https://qrdown.vercel.app/api/cli/<TRANSFER_ID>
+```
+
+### 5. Early Deletion
+```bash
+curl -X DELETE https://qrdown.vercel.app/api/cli/<TRANSFER_ID>
+```
+
+**API Specifications:**
+* **Limits**: Up to 100 MB per transfer.
+* **Retention**: 1 hour default (automatic purging).
+* **Storage**: Encrypted Backblaze B2 / S3 object storage.
+* **Service Reference**: Engineered by [M-Arham07](https://github.com/M-Arham07).
 
 ---
 
