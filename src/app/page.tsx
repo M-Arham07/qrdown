@@ -767,12 +767,12 @@ function MainContent() {
             <h1 className="text-3xl font-semibold tracking-tight">
               {transferMode === "network"
                 ? "Send files between devices."
-                : "Air-Gapped Optical Transfer."}
+                : "Send files by QR."}
             </h1>
             <p className="mt-2 text-sm text-[#52525B]">
               {transferMode === "network"
                 ? "Direct peer-to-peer over local network or secure cloud relay."
-                : "Transmit files 100% offline using animated QR codes and camera."}
+                : "Display a QR stream on one device and scan it with the other."}
             </p>
           </div>
 
@@ -789,7 +789,7 @@ function MainContent() {
                 }`}
               >
                 <Zap className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span>Direct Network (P2P & Cloud)</span>
+                <span>Network</span>
                 {state !== "IDLE" && (
                   <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
                 )}
@@ -805,10 +805,8 @@ function MainContent() {
                 }`}
               >
                 <QrCode className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Air-Gapped (QR)</span>
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-medium px-1.5 py-0.5 rounded-full">
-                  Offline
-                </span>
+                <span>QR stream</span>
+
               </button>
             </div>
           </div>

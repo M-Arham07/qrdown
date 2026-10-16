@@ -1,360 +1,161 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import QRCode from "react-qr-code";
-import {
-  createOpticalFrames,
-  ChunkDensity,
-  CHUNK_DENSITIES,
-  OpticalFileInfo,
-} from "@/services/qrProtocol";
-import {
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  UploadCloud,
-  FileText,
-  Maximize2,
-  Minimize2,
-  RefreshCw,
-  Gauge,
-  Sliders,
-  CheckCircle2,
-} from "lucide-react";
-import { toast } from "sonner";
+import { useEffect, useRef, useState } from "react";
+import { Upload, Pause, Play, Maximize2 } from "lucide-react";
+import { QR_STREAM } from "@/services/qrProtocol";
+import type { OpticalFileInfo } from "@/services/qrProtocol";
+import type { EncoderRequest, EncoderResponse } from "@/services/qrWorkerTypes";
+import { useWakeLock } from "@/hooks/useWakeLock";
 
 export function OpticalSender() {
-  const [file, setFile] = useState<File | null>(null);
-  const [density, setDensity] = useState<ChunkDensity>("balanced");
-  const [fps, setFps] = useState<number>(6);
-  const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const [frames, setFrames] = useState<string[]>([]);
-  const [fileInfo, setFileInfo] = useState<OpticalFileInfo | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [info, setInfo] = useState<OpticalFileInfo | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [playing, setPlaying] = useState(true);
+  const [frameNumber, setFrameNumber] = useState(0);
+  const [error, setError] = useState("");
+  const workerRef = useRef<Worker | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackRef = useRef({ playing: true, index: 0, count: 0, reportedAt: 0 });
+  const inputRef = useRef<HTMLInputElement>(null);
+  useWakeLock(!!info && playing);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
-  // Generate frames whenever file or density changes
-  useEffect(() => {
-    if (!file) {
-      setFrames([]);
-      setFileInfo(null);
-      setCurrentIndex(0);
+  const chooseFile = (file?: File) => {
+    if (!file) return;
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setInfo(null);
+    setError("");
+    setFrameNumber(0);
+    if (file.size > QR_STREAM.maxFileBytes) {
+      setError("Choose a file under 16 MB, or use a network transfer.");
+      setPreparing(false);
       return;
     }
-
-    let isMounted = true;
-    setIsGenerating(true);
-
-    createOpticalFrames(file, density)
-      .then(({ frames: generatedFrames, fileInfo: info }) => {
-        if (!isMounted) return;
-        setFrames(generatedFrames);
-        setFileInfo(info);
-        setCurrentIndex(0);
-        setIsPlaying(true);
-        setIsGenerating(false);
-      })
-      .catch((err) => {
-        console.error("Frame generation failed", err);
-        toast.error("Failed to process file into QR frames");
-        setIsGenerating(false);
-      });
-
-    return () => {
-      isMounted = false;
+    setPreparing(true);
+    setPlaying(true);
+    playbackRef.current = { playing: true, index: 0, count: 0, reportedAt: 0 };
+    const worker = new Worker(new URL("../../workers/qrEncoder.worker.ts", import.meta.url), { type: "module" });
+    workerRef.current = worker;
+    const request = (message: EncoderRequest) => worker.postMessage(message);
+    worker.onerror = () => {
+      if (workerRef.current !== worker) return;
+      setPreparing(false);
+      setError("Could not prepare the stream. Try a smaller file.");
+      worker.terminate();
+      workerRef.current = null;
+      setInfo(null);
     };
-  }, [file, density]);
-
-  // Frame animation loop
-  useEffect(() => {
-    if (!isPlaying || frames.length <= 1) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-
-    const intervalMs = Math.round(1000 / fps);
-    timerRef.current = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % frames.length);
-    }, intervalMs);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+    worker.onmessage = ({ data }: MessageEvent<EncoderResponse>) => {
+      if (workerRef.current !== worker) return;
+      if (data.type === "error") {
+        setError(data.message);
+        setPreparing(false);
+        worker.terminate();
+        workerRef.current = null;
+        setInfo(null);
+        return;
+      }
+      if (data.type === "ready") {
+        setInfo(data.info);
+        setPreparing(false);
+        playbackRef.current.count = data.frameCount;
+        request({ type: "frame", index: 0 });
+        return;
+      }
+      const canvas = canvasRef.current;
+      const context = canvas?.getContext("2d", { alpha: false });
+      if (!canvas || !context) return;
+      const side = data.size + 8; // Four white modules on every side.
+      const scale = Math.max(1, Math.floor(900 / side));
+      if (canvas.width !== side * scale) canvas.width = canvas.height = side * scale;
+      context.fillStyle = "#FFFFFF";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#000000";
+      for (let row = 0; row < data.size; row++) {
+        for (let col = 0; col < data.size; col++) {
+          if (data.modules[row * data.size + col]) context.fillRect((col + 4) * scale, (row + 4) * scale, scale, scale);
+        }
+      }
+      const playback = playbackRef.current;
+      playback.index = data.index;
+      const now = performance.now();
+      if (now - playback.reportedAt > 250) {
+        setFrameNumber(data.chunkIndex === null ? 0 : data.chunkIndex + 1);
+        playback.reportedAt = now;
+      }
+      if (playback.playing) {
+        // Keep each frame visible long enough to be exposed by a 30 fps camera.
+        const delay = data.index === 0 ? 250 : 1000 / QR_STREAM.framesPerSecond;
+        timerRef.current = setTimeout(() => request({ type: "frame", index: (data.index + 1) % playback.count }), delay);
+      }
     };
-  }, [isPlaying, frames.length, fps]);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (selected) {
-      if (selected.size > 2 * 1024 * 1024) {
-        toast.warning(
-          "File is over 2 MB. Optical QR transfers work best with small files (under 1–2 MB)."
-        );
-      }
-      setFile(selected);
-    }
+    request({ type: "prepare", file });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
+  const togglePlayback = () => {
+    const playback = playbackRef.current;
+    playback.playing = !playback.playing;
+    setPlaying(playback.playing);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (playback.playing) workerRef.current?.postMessage({ type: "frame", index: (playback.index + 1) % playback.count } satisfies EncoderRequest);
   };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const dropped = e.dataTransfer.files?.[0];
-    if (dropped) {
-      if (dropped.size > 2 * 1024 * 1024) {
-        toast.warning(
-          "File is over 2 MB. Optical QR transfers work best with small files (under 1–2 MB)."
-        );
-      }
-      setFile(dropped);
-    }
+  const reset = () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setInfo(null);
+    setPreparing(false);
+    setError("");
   };
-
-  const currentFrameText = frames[currentIndex] || "";
-  const isHeader = currentIndex === 0;
-  const chunkNumber = isHeader ? 0 : currentIndex;
-  const totalDataChunks = fileInfo ? fileInfo.totalChunks : 0;
 
   return (
-    <div className="w-full space-y-6">
-      {/* File Dropzone / Selected card */}
-      {!file ? (
-        <div
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          className="border-2 border-dashed border-[#D4D4D8] hover:border-[#2563EB] rounded-2xl p-8 text-center transition-colors bg-white shadow-sm flex flex-col items-center justify-center min-h-[220px]"
-        >
-          <div className="w-14 h-14 rounded-full bg-blue-50 text-[#2563EB] flex items-center justify-center mb-4">
-            <UploadCloud className="w-7 h-7" />
-          </div>
-          <h3 className="text-base font-semibold text-[#18181B] mb-1">
-            Choose a file for Air-Gapped Optical Transfer
-          </h3>
-          <p className="text-xs text-[#71717A] max-w-sm mb-4">
-            Encodes your file into an animated high-contrast QR stream. Point the
-            receiver&apos;s camera to transfer 100% offline.
-          </p>
-          <label className="inline-flex items-center gap-2 px-4 py-2 bg-[#18181B] hover:bg-[#27272A] text-white text-xs font-medium rounded-lg cursor-pointer transition-colors shadow-sm">
-            <UploadCloud className="w-4 h-4" />
-            Select File
-            <input
-              type="file"
-              className="hidden"
-              onChange={handleFileChange}
-              id="optical-file-input"
-            />
-          </label>
-          <span className="text-[11px] text-[#A1A1AA] mt-3">
-            Recommended: documents, keys, configs, notes & images up to ~2 MB
-          </span>
-        </div>
-      ) : (
-        <div className="bg-white border border-[#E4E4E7] rounded-2xl p-5 shadow-sm space-y-4">
-          {/* File Header Details */}
-          <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-[#F4F4F5]">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 text-[#2563EB] flex items-center justify-center shrink-0">
-                <FileText className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-[#18181B] truncate max-w-[220px] sm:max-w-xs">
-                  {file.name}
-                </p>
-                <p className="text-xs text-[#71717A]">
-                  {(file.size / 1024).toFixed(1)} KB • {frames.length} total QR frames
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                setFile(null);
-                setFrames([]);
-              }}
-              className="text-xs text-[#71717A] hover:text-[#DC2626] transition-colors px-2 py-1 rounded"
-            >
-              Change file
-            </button>
-          </div>
-
-          {/* Density & Speed Controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <div>
-              <label className="text-xs font-medium text-[#71717A] flex items-center gap-1.5 mb-1.5">
-                <Sliders className="w-3.5 h-3.5" /> QR Code Density
-              </label>
-              <div className="grid grid-cols-3 gap-1 bg-[#F4F4F5] p-1 rounded-lg">
-                {(Object.keys(CHUNK_DENSITIES) as ChunkDensity[]).map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setDensity(d)}
-                    className={`text-xs py-1.5 px-2 rounded-md font-medium capitalize transition-all ${
-                      density === d
-                        ? "bg-white text-[#18181B] shadow-sm"
-                        : "text-[#71717A] hover:text-[#18181B]"
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-medium text-[#71717A] flex items-center gap-1.5">
-                  <Gauge className="w-3.5 h-3.5" /> Transfer Speed
-                </label>
-                <span className="text-xs font-semibold text-[#18181B]">
-                  {fps} FPS (~{Math.round((frames.length / fps) * 10) / 10}s cycle)
-                </span>
-              </div>
-              <input
-                type="range"
-                min="2"
-                max="12"
-                step="1"
-                value={fps}
-                onChange={(e) => setFps(parseInt(e.target.value, 10))}
-                className="w-full accent-[#2563EB] cursor-pointer h-2 bg-[#E4E4E7] rounded-lg"
-              />
-            </div>
-          </div>
-
-          {/* QR Display Area */}
-          <div
-            className={`relative flex flex-col items-center justify-center p-6 bg-white rounded-xl border border-[#E4E4E7] transition-all ${
-              isFullscreen
-                ? "fixed inset-0 z-50 bg-white p-8 flex flex-col items-center justify-center"
-                : ""
-            }`}
-          >
-            {/* Fullscreen Toggle */}
-            <button
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className="absolute top-3 right-3 p-2 text-[#71717A] hover:text-[#18181B] hover:bg-[#F4F4F5] rounded-lg transition-colors"
-              title={isFullscreen ? "Exit Fullscreen" : "Fullscreen for easier scanning"}
-            >
-              {isFullscreen ? (
-                <Minimize2 className="w-4 h-4" />
-              ) : (
-                <Maximize2 className="w-4 h-4" />
-              )}
-            </button>
-
-            {/* Current Frame Status Badge */}
-            <div className="flex items-center gap-2 mb-4">
-              <span
-                className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                  isHeader
-                    ? "bg-amber-100 text-amber-800"
-                    : "bg-blue-100 text-[#1D4ED8]"
-                }`}
-              >
-                {isHeader
-                  ? "Header Frame (Meta)"
-                  : `Frame ${chunkNumber} of ${totalDataChunks}`}
-              </span>
-              <span className="text-xs text-[#71717A]">
-                Cycle: {Math.round(((currentIndex + 1) / frames.length) * 100)}%
-              </span>
-            </div>
-
-            {/* The Animated QR SVG */}
-            <div className="p-4 bg-white rounded-xl shadow-sm border border-[#E4E4E7]">
-              {currentFrameText ? (
-                <QRCode
-                  value={currentFrameText}
-                  size={isFullscreen ? 360 : 256}
-                  level="M"
-                  style={{ height: "auto", maxWidth: "100%", width: "100%" }}
-                />
-              ) : (
-                <div className="w-64 h-64 flex items-center justify-center text-xs text-[#71717A]">
-                  <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB] mb-2" />
-                </div>
-              )}
-            </div>
-
-            {/* Playback Progress Indicator */}
-            <div className="w-full max-w-xs mt-4">
-              <div className="h-1.5 w-full bg-[#E4E4E7] rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-[#2563EB] transition-all duration-150"
-                  style={{
-                    width: `${((currentIndex + 1) / frames.length) * 100}%`,
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Player Controls */}
-            <div className="flex items-center gap-3 mt-4">
-              <button
-                type="button"
-                onClick={() =>
-                  setCurrentIndex((prev) =>
-                    prev === 0 ? frames.length - 1 : prev - 1
-                  )
-                }
-                className="p-2 text-[#71717A] hover:text-[#18181B] hover:bg-[#F4F4F5] rounded-full transition-colors"
-                title="Previous Frame"
-              >
-                <SkipBack className="w-4 h-4" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsPlaying(!isPlaying)}
-                className="px-4 py-2 bg-[#18181B] text-white hover:bg-[#27272A] rounded-full font-medium text-xs flex items-center gap-2 transition-all shadow-sm"
-              >
-                {isPlaying ? (
-                  <>
-                    <Pause className="w-3.5 h-3.5" /> Pause Stream
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5" /> Resume Stream
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setCurrentIndex((prev) => (prev + 1) % frames.length)
-                }
-                className="p-2 text-[#71717A] hover:text-[#18181B] hover:bg-[#F4F4F5] rounded-full transition-colors"
-                title="Next Frame"
-              >
-                <SkipForward className="w-4 h-4" />
-              </button>
-            </div>
-
-            {isFullscreen && (
-              <button
-                onClick={() => setIsFullscreen(false)}
-                className="mt-6 px-4 py-1.5 bg-[#F4F4F5] hover:bg-[#E4E4E7] text-[#18181B] text-xs font-medium rounded-lg transition-colors"
-              >
-                Close Fullscreen
-              </button>
-            )}
-          </div>
-
-          <div className="text-[11px] text-[#71717A] text-center bg-blue-50/60 p-2.5 rounded-lg border border-blue-100 flex items-center justify-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
-            <span>
-              The sender loops frames continuously. The receiver camera will grab
-              each chunk automatically until complete.
-            </span>
-          </div>
-        </div>
+    <div className="space-y-5">
+      <input ref={inputRef} type="file" aria-label="File to send by QR" className="hidden"
+        onChange={event => { chooseFile(event.target.files?.[0]); event.target.value = ""; }} />
+      {!info && !preparing && (
+        <button type="button" onClick={() => inputRef.current?.click()}
+          onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); chooseFile(event.dataTransfer.files[0]); }}
+          className="flex min-h-48 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-300 px-5 py-8 text-center transition-colors hover:border-blue-700 hover:bg-zinc-50">
+          <Upload className="h-6 w-6 text-zinc-500" aria-hidden="true" />
+          <span className="text-sm font-medium text-zinc-950">Choose a file</span>
+          <span className="text-sm text-zinc-600">Or drop it here. Compression is automatic.</span>
+        </button>
       )}
+      {preparing && <p className="py-12 text-center text-sm text-zinc-600" role="status">Preparing file…</p>}
+      {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
+      <div ref={stageRef} className={`${info ? "block" : "hidden"} bg-white fullscreen:flex fullscreen:h-screen fullscreen:flex-col fullscreen:items-center fullscreen:justify-center fullscreen:p-4 [&:fullscreen_canvas]:max-w-[min(90vw,85vh)]`}>
+        <canvas ref={canvasRef} role="img" aria-label="Animated QR file stream"
+          className="mx-auto aspect-square w-full max-w-[460px]" style={{ imageRendering: "pixelated" }} />
+      </div>
+      {info && (
+        <>
+          <div className="flex items-start justify-between gap-3 text-sm">
+            <div className="min-w-0">
+              <p className="truncate font-medium text-zinc-950">{info.name}</p>
+              <p className="mt-1 text-zinc-600">{(info.size / 1024).toFixed(1)} KB{info.compression === "gzip" && ` · ${Math.round((1 - info.transferSize / info.size) * 100)}% smaller`}</p>
+            </div>
+            <span className="shrink-0 text-xs tabular-nums text-zinc-600">{frameNumber ? `${frameNumber} / ${info.totalChunks}` : "File details"}</span>
+          </div>
+          <p className="text-sm leading-relaxed text-zinc-600">Point the receiving camera at this code. Keep it open until the receiver reaches 100%.</p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={togglePlayback} aria-pressed={!playing} className="btn-secondary flex min-h-11 items-center gap-2 rounded-lg px-4 text-sm">
+              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{playing ? "Pause" : "Resume"}
+            </button>
+            <button onClick={() => { if (stageRef.current?.requestFullscreen) void stageRef.current.requestFullscreen().catch(() => setError("Fullscreen is unavailable in this browser.")); }} className="btn-secondary flex min-h-11 items-center gap-2 rounded-lg px-4 text-sm"><Maximize2 className="h-4 w-4" />Enlarge</button>
+            <button onClick={reset} className="min-h-11 rounded-lg px-4 text-sm text-zinc-600 transition-colors hover:bg-zinc-100">Stop</button>
+          </div>
+        </>
+      )}
+      {preparing && <button onClick={reset} className="btn-secondary min-h-11 rounded-lg px-4 text-sm">Cancel</button>}
     </div>
   );
 }

@@ -1,166 +1,185 @@
-/**
- * WebSend Optical (Air-Gapped QR) Protocol
- * Slices files into sequential QR frames and reassembles them from camera feeds.
- * 100% client-side, zero network communication.
- */
+// QR stream v2: gzip when useful, QR alphanumeric encoding, SHA-256 verification.
+export const QR_STREAM = {
+  chunkBytes: 640,
+  framesPerSecond: 12,
+  headerInterval: 16,
+  maxFileBytes: 16 * 1024 * 1024,
+} as const;
 
 export interface OpticalFileInfo {
   id: string;
   name: string;
   size: number;
   type: string;
+  transferSize: number;
   totalChunks: number;
   chunkSize: number;
+  compression: "none" | "gzip";
+  encoding: "base45" | "base64";
+  checksum?: string;
 }
-
-export type QRFrameType = "HEADER" | "CHUNK";
-
 export interface QRHeaderFrame {
   type: "HEADER";
-  id: string;
-  totalChunks: number;
-  size: number;
-  mimeType: string;
-  name: string;
+  info: OpticalFileInfo;
 }
-
 export interface QRChunkFrame {
   type: "CHUNK";
   id: string;
   index: number;
-  data: string; // Base64 data
+  bytes: Uint8Array<ArrayBuffer>;
+}
+export type QRFrame = QRHeaderFrame | QRChunkFrame;
+const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+const values = new Map([...alphabet].map((char, index) => [char, index]));
+
+export function encodeBase45(bytes: Uint8Array): string {
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += 2) {
+    let value = bytes[i] * (i + 1 < bytes.length ? 256 : 1) + (bytes[i + 1] ?? 0);
+    parts.push(alphabet[value % 45]);
+    value = Math.floor(value / 45);
+    parts.push(alphabet[value % 45]);
+    if (i + 1 < bytes.length) parts.push(alphabet[Math.floor(value / 45)]);
+  }
+  return parts.join("");
+}
+export function decodeBase45(text: string): Uint8Array<ArrayBuffer> {
+  if (text.length % 3 === 1) throw new Error("Invalid QR payload");
+  const bytes = new Uint8Array(Math.floor(text.length * 2 / 3));
+  let offset = 0;
+  for (let i = 0; i < text.length; i += 3) {
+    const a = values.get(text[i]);
+    const b = values.get(text[i + 1]);
+    const c = i + 2 < text.length ? values.get(text[i + 2]) : 0;
+    if (a === undefined || b === undefined || c === undefined) throw new Error("Invalid QR payload");
+    const value = a + b * 45 + c * 2025;
+    if (i + 2 < text.length) {
+      if (value > 65535) throw new Error("Invalid QR payload");
+      bytes[offset++] = value >> 8;
+      bytes[offset++] = value & 255;
+    } else {
+      if (value > 255) throw new Error("Invalid QR payload");
+      bytes[offset++] = value;
+    }
+  }
+  return bytes;
+}
+async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
-export type QRFrame = QRHeaderFrame | QRChunkFrame;
-
-export const CHUNK_DENSITIES = {
-  compact: { label: "Compact (Fast scan)", bytes: 250 },
-  balanced: { label: "Balanced (Recommended)", bytes: 450 },
-  dense: { label: "Dense (Faster transfer)", bytes: 750 },
-} as const;
-
-export type ChunkDensity = keyof typeof CHUNK_DENSITIES;
-
-/**
- * Encodes an ArrayBuffer into an array of QR code text frames
- */
-export async function createOpticalFrames(
-  file: File,
-  density: ChunkDensity = "balanced"
-): Promise<{ frames: string[]; fileInfo: OpticalFileInfo }> {
-  const chunkSize = CHUNK_DENSITIES[density].bytes;
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const totalChunks = Math.ceil(bytes.length / chunkSize) || 1;
-  const id = Math.random().toString(36).substring(2, 8);
-
-  const fileInfo: OpticalFileInfo = {
-    id,
-    name: file.name,
-    size: file.size,
-    type: file.type || "application/octet-stream",
-    totalChunks,
-    chunkSize,
-  };
-
-  const frames: string[] = [];
-
-  // Header Frame: WS1|H|<id>|<totalChunks>|<size>|<mimeType>|<encodedFileName>
-  const encodedName = encodeURIComponent(file.name);
-  const encodedMime = encodeURIComponent(fileInfo.type);
-  const headerFrame = `WS1|H|${id}|${totalChunks}|${file.size}|${encodedMime}|${encodedName}`;
-  frames.push(headerFrame);
-
-  // Chunk Frames: WS1|C|<id>|<index>|<base64Data>
-  for (let i = 0; i < totalChunks; i++) {
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize, bytes.length);
-    const chunkBytes = bytes.subarray(start, end);
-
-    // Convert chunk bytes to binary string then base64
-    let binary = "";
-    const len = chunkBytes.byteLength;
-    for (let j = 0; j < len; j++) {
-      binary += String.fromCharCode(chunkBytes[j]);
-    }
-    const base64 = btoa(binary);
-
-    frames.push(`WS1|C|${id}|${i}|${base64}`);
+export async function createOpticalFrames(file: File): Promise<{ frames: string[]; fileInfo: OpticalFileInfo }> {
+  if (file.size > QR_STREAM.maxFileBytes) throw new Error("QR transfer supports files up to 16 MB. Use a network transfer for larger files.");
+  const original = new Uint8Array(await file.arrayBuffer());
+  const checksum = await digest(original);
+  let bytes = original;
+  let compression: OpticalFileInfo["compression"] = "none";
+  if (original.length > 128 && typeof CompressionStream !== "undefined") {
+    try {
+      const compressed = new Uint8Array(await new Response(
+        new Blob([original]).stream().pipeThrough(new CompressionStream("gzip"))
+      ).arrayBuffer());
+      if (compressed.length < original.length) {
+        bytes = compressed;
+        compression = "gzip";
+      }
+    } catch { /* Browsers without gzip support send the original bytes. */ }
   }
-
+  const fileInfo: OpticalFileInfo = {
+    id: crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase(),
+    name: file.name, type: file.type || "application/octet-stream", size: file.size,
+    transferSize: bytes.length, totalChunks: Math.max(1, Math.ceil(bytes.length / QR_STREAM.chunkBytes)),
+    chunkSize: QR_STREAM.chunkBytes, compression, encoding: "base45", checksum,
+  };
+  const metadata = JSON.stringify([fileInfo.name, fileInfo.type, fileInfo.size, bytes.length,
+    fileInfo.totalChunks, fileInfo.chunkSize, compression, checksum]);
+  const header = `WS2:H:${fileInfo.id}:${encodeBase45(new TextEncoder().encode(metadata))}`;
+  const frames = [header];
+  for (let index = 0; index < fileInfo.totalChunks; index++) {
+    const chunk = bytes.subarray(index * fileInfo.chunkSize, (index + 1) * fileInfo.chunkSize);
+    frames.push(`WS2:C:${fileInfo.id}:${index.toString(36).toUpperCase()}:${encodeBase45(chunk)}`);
+    // A receiver can join mid-stream without waiting for a complete file cycle.
+    if ((index + 1) % QR_STREAM.headerInterval === 0 && index + 1 < fileInfo.totalChunks) frames.push(header);
+  }
   return { frames, fileInfo };
 }
 
-/**
- * Parses a raw string scanned by a QR scanner into a typed QRFrame
- */
 export function parseOpticalFrame(raw: string): QRFrame | null {
-  if (!raw.startsWith("WS1|")) return null;
-
-  const parts = raw.split("|");
-  if (parts.length < 4) return null;
-
-  const kind = parts[1];
-  const id = parts[2];
-
-  if (kind === "H" && parts.length >= 7) {
-    const totalChunks = parseInt(parts[3], 10);
-    const size = parseInt(parts[4], 10);
-    const mimeType = decodeURIComponent(parts[5]);
-    const name = decodeURIComponent(parts[6]);
-
-    if (isNaN(totalChunks) || isNaN(size)) return null;
-
-    return {
-      type: "HEADER",
-      id,
-      totalChunks,
-      size,
-      mimeType,
-      name,
-    };
-  }
-
-  if (kind === "C" && parts.length >= 5) {
-    const index = parseInt(parts[3], 10);
-    const data = parts.slice(4).join("|"); // in case base64 contained pipes (rare)
-
-    if (isNaN(index)) return null;
-
-    return {
-      type: "CHUNK",
-      id,
-      index,
-      data,
-    };
-  }
-
+  if (raw.length > 5000) return null;
+  try {
+    const header = /^WS2:H:([A-F0-9]{12}):(.*)$/.exec(raw);
+    if (header) {
+      const metadata: unknown = JSON.parse(new TextDecoder().decode(decodeBase45(header[2])));
+      if (!Array.isArray(metadata) || metadata.length !== 8) return null;
+      const [name, type, size, transferSize, totalChunks, chunkSize, compression, checksum] = metadata;
+      if (typeof name !== "string" || !name || name.length > 1024 || typeof type !== "string" || type.length > 255 ||
+        !Number.isSafeInteger(size) || size < 0 || size > QR_STREAM.maxFileBytes ||
+        !Number.isSafeInteger(transferSize) || transferSize < 0 || transferSize > QR_STREAM.maxFileBytes ||
+        chunkSize !== QR_STREAM.chunkBytes || totalChunks !== Math.max(1, Math.ceil(transferSize / chunkSize)) ||
+        !["none", "gzip"].includes(compression) || (compression === "none" && size !== transferSize) ||
+        typeof checksum !== "string" || !/^[A-F0-9]{64}$/.test(checksum)) return null;
+      return { type: "HEADER", info: { id: header[1], name, type, size, transferSize, totalChunks,
+        chunkSize, compression, encoding: "base45", checksum } };
+    }
+    const chunk = /^WS2:C:([A-F0-9]{12}):([0-9A-Z]{1,6}):(.*)$/.exec(raw);
+    if (chunk) {
+      const bytes = decodeBase45(chunk[3]);
+      if (bytes.length > QR_STREAM.chunkBytes) return null;
+      return { type: "CHUNK", id: chunk[1], index: parseInt(chunk[2], 36), bytes };
+    }
+    // Receive streams from the previous WebSend release as well.
+    const parts = raw.split("|");
+    if (parts[0] !== "WS1" || !/^[a-z0-9]{1,32}$/i.test(parts[2] || "")) return null;
+    if (parts[1] === "H" && parts.length === 7) {
+      const totalChunks = Number(parts[3]);
+      const size = Number(parts[4]);
+      if (!Number.isSafeInteger(size) || size < 0 || size > QR_STREAM.maxFileBytes ||
+        !Number.isSafeInteger(totalChunks) || totalChunks < 1 || totalChunks > Math.ceil(QR_STREAM.maxFileBytes / 250) + 1) return null;
+      return { type: "HEADER", info: { id: parts[2], name: decodeURIComponent(parts[6]),
+        type: decodeURIComponent(parts[5]), size, transferSize: size, totalChunks,
+        chunkSize: 0, compression: "none", encoding: "base64" } };
+    }
+    if (parts[1] === "C" && parts.length === 5 && /^\d{1,6}$/.test(parts[3])) {
+      const binary = atob(parts[4]);
+      if (binary.length > 750) return null;
+      return { type: "CHUNK", id: parts[2], index: Number(parts[3]),
+        bytes: Uint8Array.from(binary, char => char.charCodeAt(0)) };
+    }
+  } catch { /* Ignore camera noise and unrelated QR codes. */ }
   return null;
 }
 
-/**
- * Reassembles collected Base64 chunks into a downloadable File / Blob
- */
-export function assembleOpticalFile(
-  fileInfo: OpticalFileInfo,
-  chunks: Map<number, string>
-): Blob {
-  const byteArrays: Uint8Array[] = [];
-
-  for (let i = 0; i < fileInfo.totalChunks; i++) {
-    const base64 = chunks.get(i);
-    if (!base64) {
-      throw new Error(`Missing chunk #${i}`);
-    }
-
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let j = 0; j < len; j++) {
-      bytes[j] = binaryString.charCodeAt(j);
-    }
-    byteArrays.push(bytes);
+export async function assembleOpticalFile(info: OpticalFileInfo, chunks: Map<number, Uint8Array<ArrayBuffer>>): Promise<Blob> {
+  const parts: Uint8Array<ArrayBuffer>[] = [];
+  let byteCount = 0;
+  for (let index = 0; index < info.totalChunks; index++) {
+    const bytes = chunks.get(index);
+    if (!bytes) throw new Error("Some frames are still missing");
+    byteCount += bytes.length;
+    parts.push(bytes);
   }
-
-  return new Blob(byteArrays as unknown as BlobPart[], { type: fileInfo.type });
+  if (byteCount !== info.transferSize) throw new Error("The received file is incomplete");
+  let blob = new Blob(parts, { type: info.type });
+  if (info.compression === "gzip") {
+    if (typeof DecompressionStream === "undefined") throw new Error("Update your browser to receive compressed files");
+    const reader = blob.stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+    const expanded: Uint8Array<ArrayBuffer>[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > info.size) throw new Error("The received file has an invalid size");
+        expanded.push(new Uint8Array(value));
+      }
+    } finally { await reader.cancel(); }
+    blob = new Blob(expanded, { type: info.type });
+  }
+  if (blob.size !== info.size) throw new Error("The received file has an invalid size");
+  if (info.checksum && await digest(new Uint8Array(await blob.arrayBuffer())) !== info.checksum) {
+    throw new Error("File verification failed. Start the QR transfer again.");
+  }
+  return blob;
 }
