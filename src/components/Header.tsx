@@ -27,17 +27,31 @@ export function Header() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
         {/* Logo & Brand */}
         <Link href="/" className="flex items-center gap-2.5 group">
-          <div className="w-8 h-8 rounded-lg bg-[#09090B] flex items-center justify-center p-1.5 shadow-xs transition-transform group-hover:scale-105">
+          <div className="w-8 h-8 rounded-lg bg-[#09090B] flex items-center justify-center p-1 shadow-xs transition-transform group-hover:scale-105 overflow-hidden">
             <svg viewBox="0 0 512 512" fill="none" className="w-full h-full">
-              <rect x="96" y="96" width="112" height="112" rx="24" stroke="#FFFFFF" strokeWidth="26"/>
-              <rect x="136" y="136" width="32" height="32" rx="8" fill="#3B82F6"/>
-              <rect x="304" y="96" width="112" height="112" rx="24" stroke="#FFFFFF" strokeWidth="26"/>
-              <rect x="344" y="136" width="32" height="32" rx="8" fill="#3B82F6"/>
-              <rect x="96" y="304" width="112" height="112" rx="24" stroke="#FFFFFF" strokeWidth="26"/>
-              <rect x="136" y="344" width="32" height="32" rx="8" fill="#3B82F6"/>
-              <g transform="translate(260, 248)">
-                <path d="M 96 16 L 96 120 M 52 84 L 96 128 L 140 84" stroke="#3B82F6" strokeWidth="32" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M 36 156 L 156 156" stroke="#60A5FA" strokeWidth="28" strokeLinecap="round"/>
+              {/* Outer White Squircle Frame */}
+              <rect x="86" y="86" width="340" height="340" rx="88" stroke="#FFFFFF" strokeWidth="48" fill="none"/>
+              {/* Little Blue QR Code Matrix */}
+              <g fill="#3B82F6">
+                <rect x="168" y="168" width="66" height="66" rx="16" stroke="#3B82F6" strokeWidth="13" fill="none"/>
+                <rect x="191" y="191" width="20" height="20" rx="5"/>
+                <rect x="278" y="168" width="66" height="66" rx="16" stroke="#3B82F6" strokeWidth="13" fill="none"/>
+                <rect x="301" y="191" width="20" height="20" rx="5"/>
+                <rect x="168" y="278" width="66" height="66" rx="16" stroke="#3B82F6" strokeWidth="13" fill="none"/>
+                <rect x="191" y="301" width="20" height="20" rx="5"/>
+                <rect x="246" y="172" width="20" height="20" rx="5"/>
+                <rect x="246" y="209" width="20" height="20" rx="5"/>
+                <rect x="246" y="246" width="20" height="20" rx="5"/>
+                <rect x="246" y="283" width="20" height="20" rx="5"/>
+                <rect x="246" y="320" width="20" height="20" rx="5"/>
+                <rect x="172" y="246" width="20" height="20" rx="5"/>
+                <rect x="209" y="246" width="20" height="20" rx="5"/>
+                <rect x="283" y="246" width="20" height="20" rx="5"/>
+                <rect x="320" y="246" width="20" height="20" rx="5"/>
+                <rect x="283" y="283" width="20" height="20" rx="5"/>
+                <rect x="320" y="283" width="20" height="20" rx="5"/>
+                <rect x="283" y="320" width="20" height="20" rx="5"/>
+                <rect x="320" y="320" width="20" height="20" rx="5"/>
               </g>
             </svg>
           </div>
