@@ -1,128 +1,139 @@
-# qrdown
+<p align="center">
+  <img src="public/favicon.svg" alt="QRDown Logo" width="96" height="96" />
+</p>
 
-qrdown is a browser-based file transfer tool providing two distinct transmission modes:
+<h1 align="center">QRDown</h1>
 
-1. **Air-Gapped Optical Transfer**: Streams files visually across physical space using high-frequency animated QR codes on one screen and a camera scanner on the receiving device. Operates 100% offline with zero network connectivity, Wi-Fi, or Bluetooth.
-2. **Direct Network Transfer**: Peer-to-peer data channel transfer using WebRTC with automatic STUN/TURN traversal and encrypted cloud fallback (Cloudflare R2 / S3) when direct connection fails due to symmetric NAT or firewall restrictions.
+<p align="center">
+  <strong>Direct, air-gapped optical and peer-to-peer file transfer in the browser.</strong><br />
+  Stream files visually across physical gaps with animated QR codes or transfer directly over WebRTC. Zero installations, zero tracking.
+</p>
 
----
-
-## Architecture Overview
-
-### 1. Optical Transfer Protocol (WS2)
-
-The optical transfer mode encodes binary files into sequential, high-density alphanumeric QR codes rendered on a canvas and captured via a Web Worker camera scanner.
-
-- **Alphanumeric Base45 Encoding**: Encodes raw bytes using the QR alphanumeric character set (`0-9`, `A-Z`, ` $%*+-./:`), maximizing barcode data density while minimizing visual complexity for the camera sensor.
-- **Adaptive Compression**: Streams passing through `CompressionStream("gzip")` before chunking if compression yields a smaller transfer size.
-- **Interleaved Headers**: Header frames containing metadata (filename, original size, transfer size, total chunks, compression type, and SHA-256 hash) are repeated every 16 chunks so receivers can join mid-stream without waiting for an entire cycle.
-- **Integrity Verification**: The receiver calculates an independent SHA-256 digest on the assembled file before saving. Transfers with checksum mismatches are rejected.
-- **Multi-threaded Scanning**: Video frame capture and decoding run inside an `OffscreenCanvas` Web Worker using `jsQR`, preventing UI stuttering and maintaining consistent 60 FPS scanning throughput.
-- **Backward Compatibility**: Automatically detects and handles legacy `WS1` base64 frames.
-
-#### Frame Structure
-
-* **Header Frame**:
-  ```text
-  WS2:H:<12-HEX-ID>:<BASE45_JSON_METADATA>
-  ```
-  Metadata array schema: `[name, mimeType, size, transferSize, totalChunks, chunkSize, compression, sha256]`
-
-* **Chunk Frame**:
-  ```text
-  WS2:C:<12-HEX-ID>:<BASE36_INDEX>:<BASE45_PAYLOAD>
-  ```
+<p align="center">
+  <a href="https://qrdown.vercel.app"><strong>Open Application</strong></a> •
+  <a href="#core-transmission-modes">Transmission Modes</a> •
+  <a href="#optical-transfer-protocol-ws2">Protocol Specs</a> •
+  <a href="#self-hosting--development">Self-Hosting</a>
+</p>
 
 ---
 
-### 2. Direct Network Transfer (WebRTC + Cloud Fallback)
+## Overview
 
-For transfers between networked devices:
-- **Pairing**: Short 6-digit numeric codes or room link QR codes coordinate the session.
-- **Signaling**: Coordinated using Upstash Redis with short TTL session keys.
-- **Transport**: WebRTC `RTCDataChannel` with backpressure monitoring against `bufferedAmountLowThreshold` to avoid memory exhaustion during large transfers.
-- **Relay Support**: Authenticated TURN relay allocation via Cloudflare Realtime TURN or coturn REST secrets for symmetric NAT traversal.
-- **Cloud Fallback**: End-to-end encrypted chunked upload via presigned S3/R2 URLs when WebRTC fails to establish a direct or relayed peer connection.
+QRDown provides two independent, high-performance file transfer methods directly within modern web browsers without requiring accounts or native applications:
+
+1. **Air-Gapped Optical Transfer**: Converts files into an animated stream of high-density QR codes rendered on-screen and captured by a receiving device's camera. Operates 100% offline with zero radio signals, local network connection, or Bluetooth required.
+2. **Direct Peer-to-Peer Transfer**: Establishes an end-to-end encrypted WebRTC `RTCDataChannel` for direct network transfers with automatic STUN/TURN traversal and encrypted cloud fallback for restrictive NAT environments.
 
 ---
 
-## Getting Started
+## Core Transmission Modes
+
+### 1. Optical Visual Transmission
+* **Air-Gapped**: Physically isolated devices exchange files via screen-to-camera optical paths.
+* **Resilient Decoding**: Built-in multi-threaded video processing using Web Workers and `OffscreenCanvas` to scan and decode at 60 FPS without UI jank.
+* **Integrity Auditing**: Independent SHA-256 checksum calculation executed on the receiver before file reconstruction.
+* **Payload Density**: High-density Base45 alphanumeric encoding with automatic gzip stream compression for text and structured data.
+
+### 2. Direct Network Transmission (WebRTC)
+* **Zero Intermediary**: Files flow directly between browser memory buffers via WebRTC data channels.
+* **Room Coordination**: Ephemeral 6-digit room codes or scannable QR pairing links for immediate connection.
+* **Symmetric NAT Traversal**: Configured for automated TURN relay negotiation via Cloudflare Realtime TURN or coturn.
+* **Encrypted Fallback**: Automatic failover to temporary encrypted storage (Cloudflare R2 / S3) if direct network connectivity cannot be negotiated.
+
+---
+
+## Optical Transfer Protocol (WS2)
+
+The optical transfer engine translates binary data into high-throughput sequential QR frames optimized for camera sensor capture.
+
+### Encoding Architecture
+* **Alphanumeric Base45**: Encodes byte streams into the standard QR alphanumeric character set (`0-9`, `A-Z`, ` $%*+-./:`). This achieves significantly higher bit density per square millimeter compared to generic binary or base64 QR payloads.
+* **Gzip Pre-compression**: Files are evaluated through `CompressionStream("gzip")` before chunking; compression is applied only when it reduces total chunk count.
+* **Cyclic Header Interleaving**: Metadata header frames repeat every 16 chunks so receivers can establish context mid-stream without waiting for an entire transmission cycle to restart.
+* **Backward Compatibility**: Automatically detects and ingests legacy `WS1` base64 frames.
+
+### Frame Schemas
+
+#### Header Frame (`WS2:H`)
+Broadcasts transfer metadata to initialize the receiving accumulator:
+```text
+WS2:H:<12-HEX-ID>:<BASE45_JSON_METADATA>
+```
+* **Payload Structure**: `[fileName, mimeType, byteSize, transferSize, totalChunks, chunkSize, compressionFlag, sha256Hash]`
+
+#### Chunk Frame (`WS2:C`)
+Transmits sequential payload segments:
+```text
+WS2:C:<12-HEX-ID>:<BASE36_INDEX>:<BASE45_DATA>
+```
+
+---
+
+## Self-Hosting & Development
 
 ### Prerequisites
+* Node.js 20.x or later
+* pnpm 9.x or later
 
-- Node.js 20.x or later
-- pnpm 9.x or later
+### Local Setup
 
-### Local Development
-
-1. Clone the repository:
-   ```sh
+1. **Clone the repository**:
+   ```bash
    git clone https://github.com/M-Arham07/qrdown.git
    cd qrdown
    ```
 
-2. Install dependencies:
-   ```sh
+2. **Install project dependencies**:
+   ```bash
    pnpm install
    ```
 
-3. Create a local environment file:
-   ```sh
+3. **Configure local environment**:
+   ```bash
    cp .env.example .env.local
    ```
 
-4. Run the development server:
-   ```sh
+4. **Start development server**:
+   ```bash
    pnpm dev
    ```
 
-Open `http://localhost:3000` in your browser.
+Open [`http://localhost:3000`](http://localhost:3000) in your browser.
 
 ---
 
-## Configuration
+## Environment Configuration
 
-All environment variables are optional for local development (which falls back to in-memory coordination). For production deployments with multiple serverless instances, configure the following:
+For local development, all variables are optional (the system defaults to in-memory coordination). For production deployments spanning serverless edge functions, configure the following:
 
 ### Upstash Redis (Session & Signaling)
-
-Required in serverless environments (e.g. Vercel) where memory state cannot be shared across lambdas:
-
+Required for multi-instance serverless deployments to share active room states:
 ```dotenv
 UPSTASH_REDIS_REST_URL=https://your-instance.upstash.io
 UPSTASH_REDIS_REST_TOKEN=your_token
 ```
 
-### Dedicated TURN Relay
-
-Recommended for reliable cross-network WebRTC connections across mobile carriers and corporate firewalls.
+### TURN Relay Infrastructure
+Enables peer-to-peer data channel connections across cellular networks and restrictive enterprise firewalls:
 
 #### Option A: Cloudflare Realtime TURN (Recommended)
+```dotenv
+CLOUDFLARE_TURN_KEY_ID=your_key_id
+CLOUDFLARE_TURN_API_TOKEN=your_api_token
+```
 
-1. Open Cloudflare Dashboard > Realtime > TURN and generate a TURN key.
-2. Configure:
-   ```dotenv
-   CLOUDFLARE_TURN_KEY_ID=your_key_id
-   CLOUDFLARE_TURN_API_TOKEN=your_api_token
-   ```
-
-#### Option B: Static Relay Credentials / coturn
-
+#### Option B: Dedicated coturn or Static Relay
 ```dotenv
 TURN_URLS=turn:relay.example.com:3478?transport=udp,turn:relay.example.com:3478?transport=tcp,turns:relay.example.com:443?transport=tcp
 TURN_USERNAME=your_username
 TURN_CREDENTIAL=your_password
-```
-
-For coturn with shared secret authentication:
-```dotenv
+# Or shared secret authentication:
 TURN_SHARED_SECRET=your_coturn_shared_secret
 ```
 
 ### Cloud Storage Fallback (Optional)
-
-Configure Cloudflare R2 or an S3-compatible bucket for encrypted cloud fallback:
-
+Temporary object storage (S3 / Cloudflare R2) when direct peer connections fail:
 ```dotenv
 R2_ACCOUNT_ID=your_account_id
 R2_ACCESS_KEY_ID=your_access_key
@@ -134,28 +145,21 @@ CRON_SECRET=your_cleanup_cron_secret
 
 ---
 
-## Production Deployment
+## Browser Support & Security Model
 
-### Vercel
-
-The application is optimized for deployment on Vercel:
-
-```sh
-pnpm exec vercel --prod
-```
-
-Ensure environment variables are configured either through the Vercel CLI (`vercel env add`) or in the project settings dashboard.
+* **HTTPS Enforcement**: Camera sensor access (`navigator.mediaDevices.getUserMedia`) requires a secure context (HTTPS or localhost).
+* **Memory Safety**: Chunks are processed as discrete `ArrayBuffer` instances with stream backpressure to avoid memory leaks during multi-megabyte transfers.
+* **Air-Gap Verification**: Optical transmissions emit no electromagnetic radio signals, providing physical transfer isolation.
+* **Screen Wake Lock**: Activates the Screen Wake Lock API to prevent receiver devices from sleeping during longer visual scans.
 
 ---
 
-## Browser Support & Permissions
+## Author
 
-- **Camera Scanner**: Requires HTTPS in production (browsers restrict `navigator.mediaDevices.getUserMedia` to secure origins).
-- **Streams API**: Requires support for `CompressionStream` and `DecompressionStream` for transparent gzip support (supported in Chrome 80+, Safari 16.4+, Firefox 113+).
-- **Wake Lock**: Uses the Screen Wake Lock API to prevent mobile screens from sleeping during active transfers.
+Created and maintained by [M-Arham07](https://github.com/M-Arham07).
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+This project is released under the [MIT License](LICENSE).
