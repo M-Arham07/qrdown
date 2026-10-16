@@ -9,14 +9,12 @@ import {
 } from "@/services/qrProtocol";
 import {
   Camera,
-  CameraOff,
   Download,
   CheckCircle2,
   AlertCircle,
-  RefreshCw,
   SwitchCamera,
   FileCheck,
-  Check,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,13 +35,15 @@ export function OpticalReceiver() {
     blob: Blob;
     url: string;
   } | null>(null);
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null);
+  const [isLoadingCamera, setIsLoadingCamera] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
-  // Keep a ref to collectedChunks to prevent stale closure inside requestAnimationFrame
+  // Keep a ref to collectedChunks and fileInfo to prevent stale closure inside animation loop
   const collectedChunksRef = useRef<Map<number, string>>(new Map());
   const fileInfoRef = useRef<OpticalFileInfo | null>(null);
 
@@ -57,6 +57,7 @@ export function OpticalReceiver() {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    setActiveStream(null);
     setIsScanning(false);
   }, []);
 
@@ -86,7 +87,7 @@ export function OpticalReceiver() {
   const scanFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
+    if (!video || !canvas || video.readyState < 2) {
       animationFrameRef.current = requestAnimationFrame(scanFrame);
       return;
     }
@@ -97,8 +98,11 @@ export function OpticalReceiver() {
       return;
     }
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+    }
+
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -109,7 +113,7 @@ export function OpticalReceiver() {
     if (code && code.data) {
       const parsed = parseOpticalFrame(code.data);
       if (parsed) {
-        // Draw green bounding box over detected QR code
+        // Draw emerald bounding box over detected QR code
         ctx.beginPath();
         ctx.moveTo(code.location.topLeftCorner.x, code.location.topLeftCorner.y);
         ctx.lineTo(code.location.topRightCorner.x, code.location.topRightCorner.y);
@@ -117,7 +121,7 @@ export function OpticalReceiver() {
         ctx.lineTo(code.location.bottomLeftCorner.x, code.location.bottomLeftCorner.y);
         ctx.closePath();
         ctx.lineWidth = 4;
-        ctx.strokeStyle = "#10B981"; // Emerald
+        ctx.strokeStyle = "#10B981";
         ctx.stroke();
 
         if (parsed.type === "HEADER") {
@@ -133,14 +137,12 @@ export function OpticalReceiver() {
             };
             fileInfoRef.current = newInfo;
             setFileInfo(newInfo);
-            // Reset chunks for this new transfer ID
             const newMap = new Map<number, string>();
             collectedChunksRef.current = newMap;
             setCollectedChunks(new Map(newMap));
           }
         } else if (parsed.type === "CHUNK") {
           const currentInfo = fileInfoRef.current;
-          // If chunk belongs to current file or we don't have header yet
           if (!currentInfo || currentInfo.id === parsed.id) {
             setLastScannedFrameId(`Chunk #${parsed.index + 1}`);
 
@@ -149,7 +151,6 @@ export function OpticalReceiver() {
               const updated = new Map(collectedChunksRef.current);
               setCollectedChunks(updated);
 
-              // Check if completed
               if (currentInfo && updated.size === currentInfo.totalChunks) {
                 finalizeFile(currentInfo, updated);
                 return;
@@ -163,36 +164,107 @@ export function OpticalReceiver() {
     animationFrameRef.current = requestAnimationFrame(scanFrame);
   }, [finalizeFile]);
 
-  // Start camera stream
-  const startCamera = async () => {
-    try {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
+  // Attach stream to video whenever activeStream updates
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !activeStream) return;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
+    video.srcObject = activeStream;
+    video.setAttribute("playsinline", "true");
+    video.setAttribute("webkit-playsinline", "true");
+    video.muted = true;
+
+    let isCancelled = false;
+    video
+      .play()
+      .then(() => {
+        if (!isCancelled) {
+          setIsScanning(true);
+          setIsLoadingCamera(false);
+          animationFrameRef.current = requestAnimationFrame(scanFrame);
+        }
+      })
+      .catch((err) => {
+        console.error("Video play() failed:", err);
+        if (!isCancelled) {
+          setIsLoadingCamera(false);
+          toast.error("Tap screen or retry to allow video playback.");
+        }
       });
 
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        await videoRef.current.play();
+    return () => {
+      isCancelled = true;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [activeStream, scanFrame]);
+
+  // Request camera access with progressive fallbacks for mobile browsers
+  const startCamera = async () => {
+    setIsLoadingCamera(true);
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        toast.error("Camera is not supported in this browser environment. Ensure HTTPS is used.");
+        setIsLoadingCamera(false);
+        return;
       }
 
-      setCameraPermission("granted");
-      setIsScanning(true);
-      animationFrameRef.current = requestAnimationFrame(scanFrame);
-    } catch (err) {
-      console.error("Camera access failed", err);
+      // Stop previous tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      let stream: MediaStream | null = null;
+
+      // 1. Try with ideal facingMode and resolution
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+      } catch (err1) {
+        console.warn("First camera constraint failed, trying basic facingMode:", err1);
+        // 2. Fallback to basic facingMode without dimensions
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode,
+            },
+            audio: false,
+          });
+        } catch (err2) {
+          console.warn("Second camera constraint failed, trying generic video constraint:", err2);
+          // 3. Last fallback: any available video device
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+      }
+
+      if (stream) {
+        streamRef.current = stream;
+        setActiveStream(stream);
+        setCameraPermission("granted");
+      }
+    } catch (err: unknown) {
+      console.error("All camera access attempts failed:", err);
       setCameraPermission("denied");
+      setIsLoadingCamera(false);
       setIsScanning(false);
-      toast.error("Camera access was denied or is not available.");
+      const name = err instanceof Error ? err.name : "";
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        toast.error("Camera permission was denied. Please allow camera access in browser settings.");
+      } else {
+        toast.error("Camera could not be opened. Ensure no other app is using it.");
+      }
     }
   };
 
@@ -200,9 +272,9 @@ export function OpticalReceiver() {
     setFacingMode((prev) => (prev === "environment" ? "user" : "environment"));
   };
 
-  // Re-start camera when facingMode changes
+  // Switch camera when facingMode changes if already scanning
   useEffect(() => {
-    if (isScanning) {
+    if (activeStream) {
       startCamera();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,7 +297,7 @@ export function OpticalReceiver() {
     for (let i = 0; i < total; i++) {
       if (!collectedChunks.has(i)) {
         missingIndices.push(i + 1);
-        if (missingIndices.length >= 10) break; // preview max 10
+        if (missingIndices.length >= 8) break;
       }
     }
   }
@@ -294,7 +366,7 @@ export function OpticalReceiver() {
               </h3>
             </div>
 
-            {isScanning && (
+            {activeStream && (
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -315,59 +387,76 @@ export function OpticalReceiver() {
             )}
           </div>
 
-          {/* Camera Viewfinder / Start prompt */}
-          {!isScanning ? (
-            <div className="border-2 border-dashed border-[#D4D4D8] rounded-2xl p-8 text-center bg-[#FAFAFA] flex flex-col items-center justify-center min-h-[260px]">
-              <div className="w-14 h-14 rounded-full bg-blue-50 text-[#2563EB] flex items-center justify-center mb-3">
-                <Camera className="w-7 h-7" />
-              </div>
-              <h4 className="text-sm font-semibold text-[#18181B] mb-1">
-                Point camera at sender&apos;s animated QR code
-              </h4>
-              <p className="text-xs text-[#71717A] max-w-sm mb-4">
-                The scanner automatically detects incoming frames and reassembles the
-                file in real time without any internet connection.
-              </p>
-              <button
-                type="button"
-                onClick={startCamera}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#18181B] hover:bg-[#27272A] text-white text-xs font-medium rounded-xl shadow-sm transition-all"
-              >
-                <Camera className="w-4 h-4" /> Start Camera Scan
-              </button>
-            </div>
-          ) : (
-            <div className="relative rounded-2xl overflow-hidden bg-black aspect-video max-h-[380px] flex items-center justify-center">
-              {/* Video Element */}
-              <video
-                ref={videoRef}
-                className="w-full h-full object-cover"
-                muted
-              />
+          {/* Always-mounted Viewfinder Container */}
+          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video max-h-[380px] flex items-center justify-center border border-[#E4E4E7]">
+            {/* The HTML5 Video Element: Always present in the DOM */}
+            <video
+              ref={videoRef}
+              playsInline
+              autoPlay
+              muted
+              className={`w-full h-full object-cover ${activeStream ? "block" : "hidden"}`}
+            />
 
-              {/* Overlay Canvas for QR Tracking Reticle */}
-              <canvas
-                ref={canvasRef}
-                className="absolute inset-0 w-full h-full pointer-events-none"
-              />
+            {/* Overlay Canvas for QR Tracking Reticle */}
+            <canvas
+              ref={canvasRef}
+              className={`absolute inset-0 w-full h-full pointer-events-none ${activeStream ? "block" : "hidden"}`}
+            />
 
-              {/* Scanning Target Finder Box */}
-              <div className="absolute w-56 h-56 border-2 border-white/60 rounded-2xl pointer-events-none flex items-center justify-center">
-                <div className="w-48 h-48 border border-dashed border-white/40 rounded-xl" />
-              </div>
+            {/* Target Reticle when active */}
+            {activeStream && (
+              <>
+                <div className="absolute w-52 h-52 sm:w-56 sm:h-56 border-2 border-white/70 rounded-2xl pointer-events-none flex items-center justify-center shadow-lg">
+                  <div className="w-44 h-44 sm:w-48 sm:h-48 border border-dashed border-white/50 rounded-xl" />
+                </div>
 
-              {/* Live HUD Banner */}
-              <div className="absolute top-3 inset-x-3 flex items-center justify-between px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-xl text-white text-xs">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Live Scanning
-                </span>
-                <span className="text-white/80 truncate max-w-[180px]">
-                  {lastScannedFrameId || "Aim camera at QR stream"}
-                </span>
+                {/* Live HUD Banner */}
+                <div className="absolute top-3 inset-x-3 flex items-center justify-between px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-xl text-white text-xs">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    Live Scanning
+                  </span>
+                  <span className="text-white/80 truncate max-w-[180px]">
+                    {lastScannedFrameId || "Aim camera at QR stream"}
+                  </span>
+                </div>
+              </>
+            )}
+
+            {/* Placeholder state when camera is inactive */}
+            {!activeStream && (
+              <div className="absolute inset-0 bg-[#FAFAFA] flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-14 h-14 rounded-full bg-blue-50 text-[#2563EB] flex items-center justify-center mb-3">
+                  <Camera className="w-7 h-7" />
+                </div>
+                <h4 className="text-sm font-semibold text-[#18181B] mb-1">
+                  Point camera at sender&apos;s animated QR code
+                </h4>
+                <p className="text-xs text-[#71717A] max-w-sm mb-4">
+                  The scanner reads frames directly from your screen and downloads the
+                  file 100% offline.
+                </p>
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  disabled={isLoadingCamera}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#18181B] hover:bg-[#27272A] text-white text-xs font-medium rounded-xl shadow-sm transition-all disabled:opacity-50"
+                >
+                  {isLoadingCamera ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Opening Camera...
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-4 h-4" /> Start Camera Scan
+                    </>
+                  )}
+                </button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Transfer Progress HUD */}
           {fileInfo ? (
@@ -404,7 +493,7 @@ export function OpticalReceiver() {
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>
                     Waiting for missing chunks: #{missingIndices.join(", #")}
-                    {fileInfo.totalChunks - receivedCount > 10 ? "..." : ""}
+                    {fileInfo.totalChunks - receivedCount > 8 ? "..." : ""}
                   </span>
                 </div>
               )}
